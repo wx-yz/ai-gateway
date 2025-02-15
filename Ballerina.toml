@@ -1,6 +1,6 @@
 [package]
 org = "dz"
-name = "ai_proxy"
+name = "ai_gateway"
 version = "0.1.0"
 distribution = "2201.11.0"
 

@@ -1,101 +1,13 @@
+import ballerina/io;
 import ballerina/http;
 import ballerina/log;
+import ai_gateway.llms;
+import ai_gateway.analytics;
 
-// Configuration types for different LLM providers
-type OpenAIConfig record {
-    string apiKey;
-    string model;
-    string endpoint;
-};
-
-type OllamaConfig record {
-    string apiKey;
-    string model;
-    string endpoint;
-};
-
-type AnthropicConfig record {
-    string apiKey;
-    string model;
-    string endpoint;
-};
-
-type GeminiConfig record {
-    string apiKey;
-    string model;
-    string endpoint;
-};
-
-// Add after the existing config types
-type SystemPromptConfig record {
-    string prompt;
-};
-
-// Canonical response format
-type LLMResponse record {
-    string text;
-    int input_tokens;
-    int output_tokens;
-    string model;
-    string provider;
-};
-
-// Common request format
-type LLMRequest record {
-    string prompt;
-    float temperature?;
-    int maxTokens?;
-};
-
-// Handle Anthropic response
-type AnthropicResponseContent record {
-    string text;    
-};
-type AnthropicResponseContents record {
-    AnthropicResponseContent[] content;
-};
-type AnthropicResponseTokenUsage record {
-    int input_tokens;
-    int output_tokens;
-};
-type AnthropicResponse record {
-    AnthropicResponseContents contents;
-    AnthropicResponseTokenUsage usage;
-    string model;
-};
-
-// Handle OpenAI response
-type OpenAIResponseChoiceMessage record {
-    string content;
-};
-type OpenAIResponseChoice record {
-    OpenAIResponseChoiceMessage message;
-};
-type OpenAIResponseUsage record {    
-    int completion_tokens;
-    int prompt_tokens;
-};
-type OpenAIResponse record {
-    OpenAIResponseChoice[] choices;
-    OpenAIResponseUsage usage;
-    string model;
-};
-
-// Handle Ollama response
-type OllamaResponseMessage record {
-    string content;
-};
-type OllamaResponse record {
-    string model;
-    OllamaResponseMessage message;
-    int prompt_eval_count;
-    int eval_count;
-};
-
-configurable OpenAIConfig openAIConfig = ?;
-configurable AnthropicConfig anthropicConfig = ?;
-configurable GeminiConfig geminiConfig = ?;
-configurable OllamaConfig ollamaConfig = ?;
+configurable llms:OpenAIConfig openAIConfig = ?;
+configurable llms:AnthropicConfig anthropicConfig = ?;
+configurable llms:GeminiConfig geminiConfig = ?;
+configurable llms:OllamaConfig ollamaConfig = ?;
 
 // Add system prompt storage
 string systemPrompt = "";
@@ -128,7 +40,7 @@ function applyGuardrails(string text) returns string|error {
     }
 
     foreach string phrase in guardrails.bannedPhrases {
-        if (text.includes(phrase)) {
+        if (text.toLowerAscii().includes(phrase)) {
             return error("Response contains banned phrase: " + phrase);
         }
     }
@@ -139,6 +51,8 @@ function applyGuardrails(string text) returns string|error {
 
     return textRes;
 }
+
+
 
 service / on new http:Listener(8080) {
     private final http:Client openaiClient;
@@ -153,27 +67,58 @@ service / on new http:Listener(8080) {
         self.ollamaClient = check new (ollamaConfig.endpoint);
     }
 
-    resource function post chat(@http:Header string llmProvider, @http:Payload LLMRequest payload) returns LLMResponse|error {
+    resource function post chat(@http:Header string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
+        // Update request stats
+        lock {
+            requestStats.totalRequests += 1;
+            requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
+        }
+
+        llms:LLMResponse|error response;
         match llmProvider {
             "openai" => {
-                return self.handleOpenAI(payload);
+                response = self.handleOpenAI(payload);
             }
             "anthropic" => {
-                return self.handleAnthropic(payload);
+                response = self.handleAnthropic(payload);
             }
             "gemini" => {
-                return self.handleGemini(payload);
+                response = self.handleGemini(payload);
             }
             "ollama" => {
-                return self.handleOllama(payload);
+                response = self.handleOllama(payload);
             }
             _ => {
-                return error("Unsupported LLM provider");
+                response = error("Unsupported LLM provider");
             }
         }
+
+        if response is error {
+            lock {
+                requestStats.failedRequests += 1;
+                requestStats.errorsByProvider[llmProvider] = (requestStats.errorsByProvider[llmProvider] ?: 0) + 1;
+                errorStats.totalErrors += 1;
+                errorStats.errorsByType[response.message()] = (errorStats.errorsByType[response.message()] ?: 0) + 1;
+                errorStats.recentErrors.push(response.message());
+                if (errorStats.recentErrors.length() > 10) {
+                    _ = errorStats.recentErrors.shift();
+                }
+            }
+            return response;
+        }
+
+        lock {
+            requestStats.successfulRequests += 1;
+            tokenStats.totalInputTokens += response.input_tokens;
+            tokenStats.totalOutputTokens += response.output_tokens;
+            tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + response.input_tokens;
+            tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + response.output_tokens;
+        }
+
+        return response;
     }
 
-    private function handleOpenAI(LLMRequest req) returns LLMResponse|error {
+    private function handleOpenAI(llms:LLMRequest req) returns llms:LLMResponse|error {
         // Transform to OpenAI format
         json openAIPayload = {
             "model": openAIConfig.model,
@@ -196,7 +141,7 @@ service / on new http:Listener(8080) {
         });
 
         json responsePayload = check response.getJsonPayload();
-        OpenAIResponse openAIResponse = check responsePayload.cloneWithType(OpenAIResponse);
+        llms:OpenAIResponse openAIResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
         string guardedText = check applyGuardrails(openAIResponse.choices[0].message.content);
@@ -209,7 +154,7 @@ service / on new http:Listener(8080) {
         };
     }
 
-    private function handleOllama(LLMRequest req) returns LLMResponse|error {
+    private function handleOllama(llms:LLMRequest req) returns llms:LLMResponse|error {
         // Transform to OpenAI format
         json ollamaPayload = {
             "model": ollamaConfig.model,
@@ -235,7 +180,7 @@ service / on new http:Listener(8080) {
 
         json responsePayload = check response.getJsonPayload();
         log:printInfo("Ollama response: " + responsePayload.toString());
-        OllamaResponse ollamaResponse = check responsePayload.cloneWithType(OllamaResponse);
+        llms:OllamaResponse ollamaResponse = check responsePayload.cloneWithType(llms:OllamaResponse);
 
         // Apply guardrails before returning
         string guardedText = check applyGuardrails(ollamaResponse.message.content);
@@ -248,7 +193,7 @@ service / on new http:Listener(8080) {
         };
     }    
 
-    private function handleAnthropic(LLMRequest req) returns LLMResponse|error {
+    private function handleAnthropic(llms:LLMRequest req) returns llms:LLMResponse|error {
         // Transform to Anthropic format
         json anthropicPayload = {
             "model": anthropicConfig.model,
@@ -272,7 +217,7 @@ service / on new http:Listener(8080) {
 
         json responsePayload = check response.getJsonPayload();
         log:printInfo("Anthropic response: " + responsePayload.toString());
-        AnthropicResponse anthropicResponse = check responsePayload.cloneWithType(AnthropicResponse);
+        llms:AnthropicResponse anthropicResponse = check responsePayload.cloneWithType(llms:AnthropicResponse);
         
         // Apply guardrails before returning
         string guardedText = check applyGuardrails(anthropicResponse.contents.content[0].text);
@@ -285,7 +230,7 @@ service / on new http:Listener(8080) {
         };
     }
 
-    private function handleGemini(LLMRequest req) returns LLMResponse|error {
+    private function handleGemini(llms:LLMRequest req) returns llms:LLMResponse|error {
         json geminiPayload = {
             "model": geminiConfig.model,
             "messages": [
@@ -309,7 +254,7 @@ service / on new http:Listener(8080) {
 
         json responsePayload = check response.getJsonPayload();
         log:printInfo("Gemini response: " + responsePayload.toString());
-        OpenAIResponse openAIResponse = check responsePayload.cloneWithType(OpenAIResponse);
+        llms:OpenAIResponse openAIResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
         string guardedText = check applyGuardrails(openAIResponse.choices[0].message.content);
@@ -323,14 +268,42 @@ service / on new http:Listener(8080) {
     }
 }
 
+// Analytics storage
+analytics:RequestStats requestStats = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    requestsByProvider: {},
+    errorsByProvider: {}
+};
+
+analytics:TokenStats tokenStats = {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    inputTokensByProvider: {},
+    outputTokensByProvider: {}
+};
+
+analytics:ErrorStats errorStats = {
+    totalErrors: 0,
+    errorsByType: {},
+    recentErrors: []
+};
+
 // Add new admin service
 service /admin on new http:Listener(8081) {
-    resource function post systemprompt(@http:Payload SystemPromptConfig config) returns string|error {
+    // Template HTML for analytics
+    string statsTemplate = "";
+
+    function init() returns error? {
+        self.statsTemplate = check io:fileReadString("resources/stats.html");
+    }
+    resource function post systemprompt(@http:Payload llms:SystemPromptConfig config) returns string|error {
         systemPrompt = config.prompt;
         return "System prompt updated successfully";
     }
 
-    resource function get systemprompt() returns SystemPromptConfig {
+    resource function get systemprompt() returns llms:SystemPromptConfig {
         return {
             prompt: systemPrompt
         };
@@ -344,5 +317,63 @@ service /admin on new http:Listener(8081) {
 
     resource function get guardrails() returns GuardrailConfig {
         return guardrails;
+    }
+
+    resource function get stats() returns http:Response|error {
+        string[] requestLabels = [];
+        int[] requestData = [];
+        int i = 0;
+        foreach string ikey in requestStats.requestsByProvider.keys() {
+            requestLabels[i] = ikey;
+            requestData[i] = requestStats.requestsByProvider[ikey] ?: 0;
+            i = i + 1;
+        }
+        string[] inputTokenLabels = [];
+        int[] inputTokenData = [];
+        i = 0;
+        foreach string ikey in tokenStats.inputTokensByProvider.keys() {
+            inputTokenLabels[i] = ikey;
+            inputTokenData[i] = tokenStats.inputTokensByProvider[ikey] ?: 0;
+            i = i + 1;
+        }
+        int[] outputTokenData = [];
+        i = 0;
+        foreach string ikey in tokenStats.outputTokensByProvider.keys() {
+            outputTokenData[i] = tokenStats.outputTokensByProvider[ikey] ?: 0;
+            i = i + 1;
+        }
+        string[] errorLabels = [];
+        int[] errorData = [];
+        i = 0;
+        foreach string ikey in errorStats.errorsByType.keys() {
+            errorLabels[i] = ikey;
+            errorData[i] = errorStats.errorsByType[ikey] ?: 0;
+            i = i + 1;
+        }
+
+        // Prepare data for template
+        map<string> templateValues = {
+            "totalRequests": requestStats.totalRequests.toString(),
+            "successfulRequests": requestStats.successfulRequests.toString(),
+            "failedRequests": requestStats.failedRequests.toString(),
+            "totalInputTokens": tokenStats.totalInputTokens.toString(),
+            "totalOutputTokens": tokenStats.totalOutputTokens.toString(),
+            "totalErrors": errorStats.totalErrors.toString(),
+            "recentErrors": "<li>" + string:'join("</li><li>", ...errorStats.recentErrors) + "</li>",
+            "requestsLabels": requestLabels.toString(),
+            "requestsData": requestData.toString(),
+            "tokensLabels": inputTokenLabels.toString(),
+            "inputTokensData": inputTokenData.toString(),
+            "outputTokensData": outputTokenData.toString(),
+            "errorLabels": errorLabels.toString(),
+            "errorData": errorData.toString()
+        };
+
+        string html = analytics:renderTemplate(self.statsTemplate, templateValues);
+
+        http:Response response = new;
+        response.setHeader("Content-Type", "text/html");
+        response.setPayload(html);
+        return response;
     }
 }

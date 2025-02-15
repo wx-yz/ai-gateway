@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Gateway Stats</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .stats-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+        .stats-card { 
+            border: 1px solid #ddd; 
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Gateway Statistics</h1>
+    
+    <div class="stats-container">
+        <div class="stats-card">
+            <h2>Request Statistics</h2>
+            <p>Total Requests: {{totalRequests}}</p>
+            <p>Successful Requests: {{successfulRequests}}</p>
+            <p>Failed Requests: {{failedRequests}}</p>
+            <canvas id="requestsChart"></canvas>
+        </div>
+        
+        <div class="stats-card">
+            <h2>Token Usage</h2>
+            <p>Total Input Tokens: {{totalInputTokens}}</p>
+            <p>Total Output Tokens: {{totalOutputTokens}}</p>
+            <canvas id="tokensChart"></canvas>
+        </div>
+        
+        <div class="stats-card">
+            <h2>Error Statistics</h2>
+            <p>Total Errors: {{totalErrors}}</p>
+            <h3>Recent Errors:</h3>
+            <ul>{{recentErrors}}</ul>
+            <canvas id="errorsChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Chart.js initialization code will go here
+        const requestsCtx = document.getElementById('requestsChart').getContext('2d');
+new Chart(requestsCtx, {
+    type: 'pie',
+    data: {
+        labels: {{requestsLabels}},
+        datasets: [{
+            data: {{requestsData}},
+            backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0']
+        }]
+    }
+});
+
+const tokensCtx = document.getElementById('tokensChart').getContext('2d');
+new Chart(tokensCtx, {
+    type: 'bar',
+    data: {
+        labels: {{tokensLabels}},
+        datasets: [{
+            label: 'Input Tokens',
+            data: {{inputTokensData}},
+            backgroundColor: '#36A2EB'
+        }, {
+            label: 'Output Tokens',
+            data: {{outputTokensData}},
+            backgroundColor: '#FF6384'
+        }]
+    }
+});
+
+const errorsCtx = document.getElementById('errorsChart').getContext('2d');
+new Chart(errorsCtx, {
+    type: 'bar',
+    data: {
+        labels: {{errorLabels}},
+        datasets: [{
+            label: 'Errors by Type',
+            data: {{errorData}},
+            backgroundColor: '#FFCE56'
+        }]
+    }
+});
+    </script>
+</body>
+</html>

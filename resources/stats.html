@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Gateway Stats</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css?family=Roboto">
+    <style>
+        body { 
+            font-family: 'Roboto', system-ui, sans-serif; 
+            margin: 20px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .stats-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 25px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        .stats-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+        }
+        h2 {
+            color: #00b4d8;
+            margin-bottom: 20px;
+            border-bottom: 2px solid rgba(0, 180, 216, 0.3);
+            padding-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .stats-card i {
+            font-size: 1.4em;
+            width: 30px;
+        }
+        p {
+            font-size: 1.1em;
+            margin: 12px 0;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+        }
+        canvas {
+            margin-top: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 15px;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            padding: 8px;
+            margin: 5px 0;
+            background: rgba(255, 99, 132, 0.1);
+            border-radius: 4px;
+            transition: background 0.3s ease;
+        }
+        li:hover {
+            background: rgba(255, 99, 132, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <h1><i class="fas fa-rocket"></i> AI Gateway Statistics</h1>
+    
+    <div class="stats-container">
+        <!-- Request Statistics Card -->
+        <div class="stats-card">
+            <h2><i class="fas fa-chart-bar"></i>Request Statistics</h2>
+            <p><i class="fas fa-project-diagram"></i> Total Requests: {{totalRequests}}</p>
+            <p><i class="fas fa-check-circle"></i> Successful Requests: {{successfulRequests}}</p>
+            <p><i class="fas fa-times-circle"></i> Failed Requests: {{failedRequests}}</p>
+            <canvas id="requestsChart"></canvas>
+        </div>
+        
+        <!-- Token Usage Card -->
+        <div class="stats-card">
+            <h2><i class="fas fa-coins"></i>Token Usage</h2>
+            <p><i class="fas fa-sign-in-alt"></i> Total Input Tokens: {{totalInputTokens}}</p>
+            <p><i class="fas fa-sign-out-alt"></i> Total Output Tokens: {{totalOutputTokens}}</p>
+            <canvas id="tokensChart"></canvas>
+        </div>
+        
+        <!-- Error Statistics Card -->
+        <div class="stats-card">
+            <h2><i class="fas fa-exclamation-triangle"></i>Error Statistics</h2>
+            <p><i class="fas fa-bug"></i> Total Errors: {{totalErrors}}</p>
+            <h3><i class="fas fa-clock"></i> Recent Errors:</h3>
+            <ul>{{recentErrors}}</ul>
+            <canvas id="errorsChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Rest of the script section remains unchanged -->
+    <script>
+        // Gradient color generator
+        const createGradient = (ctx, color1, color2) => {
+            const gradient = ctx.createLinearGradient(0, 0, 400, 0);
+            gradient.addColorStop(0, color1);
+            gradient.addColorStop(1, color2);
+            return gradient;
+        };
+
+        // Requests Chart (Doughnut)
+        const requestsCtx = document.getElementById('requestsChart').getContext('2d');
+        new Chart(requestsCtx, {
+            type: 'doughnut',
+            data: {
+                labels: {{requestsLabels}},
+                datasets: [{
+                    data: {{requestsData}},
+                    backgroundColor: [
+                        createGradient(requestsCtx, '#ff6b6b', '#ff9f43'),
+                        createGradient(requestsCtx, '#4ecdc4', '#45b7d1'),
+                        createGradient(requestsCtx, '#96f2d7', '#35d0ba')
+                    ],
+                    borderWidth: 2,
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    hoverOffset: 20
+                }]
+            },
+            options: {
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#fff' }
+                    }
+                }
+            }
+        });
+
+        // Tokens Chart (Bar with Gradient)
+        const tokensCtx = document.getElementById('tokensChart').getContext('2d');
+        new Chart(tokensCtx, {
+            type: 'bar',
+            data: {
+                labels: {{tokensLabels}},
+                datasets: [{
+                    label: 'Input Tokens',
+                    data: {{inputTokensData}},
+                    backgroundColor: createGradient(tokensCtx, '#36A2EB', '#4BC0C0'),
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255, 255, 255, 0.2)'
+                }, {
+                    label: 'Output Tokens',
+                    data: {{outputTokensData}},
+                    backgroundColor: createGradient(tokensCtx, '#FF6384', '#FF9F40'),
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255, 255, 255, 0.2)'
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { grid: { color: 'rgba(255, 255, 255, 0.05)' } },
+                    y: { 
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#fff' } }
+                }
+            }
+        });
+
+        // Errors Chart (Line with Animation)
+        const errorsCtx = document.getElementById('errorsChart').getContext('2d');
+        new Chart(errorsCtx, {
+            type: 'line',
+            data: {
+                labels: {{errorLabels}},
+                datasets: [{
+                    label: 'Errors by Type',
+                    data: {{errorData}},
+                    borderColor: '#FF6384',
+                    backgroundColor: createGradient(errorsCtx, '#FF638455', '#FF9F4044'),
+                    borderWidth: 2,
+                    pointRadius: 5,
+                    pointBackgroundColor: '#fff',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { grid: { color: 'rgba(255, 255, 255, 0.05)' } },
+                    y: { 
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#fff' } }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
