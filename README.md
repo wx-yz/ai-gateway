@@ -25,15 +25,16 @@ Body: {
 ```
 ### Admin API (Port 8081)
 
+#### System Prompt Injection ####
 ```
-# System Prompt Management
 GET /admin/systemprompt
 POST /admin/systemprompt
 {
     "prompt": "You are a helpful assistant..."
 }
-
-# Guardrails Configuration
+```
+#### Guardrails Configuration ####
+```
 GET /admin/guardrails
 POST /admin/guardrails
 {
@@ -43,8 +44,10 @@ POST /admin/guardrails
     "requireDisclaimer": true,
     "disclaimer": "AI-generated response"
 }
+```
 
-# Analytics Dashboard
+#### Analytics Dashboard ####
+```
 GET /admin/stats
 ```
 
