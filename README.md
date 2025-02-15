@@ -103,10 +103,33 @@ curl -X POST http://localhost:8081/admin/guardrails \
   }'
 ```
 
-4. View analytics:
+## Testing screenshots ##
+
+Chatting, prompt used: "Say hello and identify yourself"
+
+![Screenshot 2025-02-14 181101](https://github.com/user-attachments/assets/8269e3f7-ea9b-4ed7-a0fd-1fc693c25ec9)
+
+Injecting system prompt from the admin interface
+
+![Screenshot 2025-02-14 181114](https://github.com/user-attachments/assets/b276f1e9-edce-4041-b634-41f411fbe48e)
+
+Request not changed. Changed the model to ollama via custom HTTP header
+
+![Screenshot 2025-02-14 181140](https://github.com/user-attachments/assets/925ce2cd-75a1-48d5-be28-8b00c211b130)
+
+Adding guardrails. Added word "hello"
+
+![Screenshot 2025-02-14 181220](https://github.com/user-attachments/assets/5090e045-0c9a-4b8c-a06b-a4bf72c530a5)
+
+At this point, removed the system prompt and it defauts to English. Now sending the same request
+
+![Screenshot 2025-02-14 181234](https://github.com/user-attachments/assets/11566a9b-7a58-4f5a-ae35-6f2eba76a78e)
+
+## View analytics ##
 
 - Open `http://localhost:8081/admin/stats` in your browser
 
+![Screenshot 2025-02-14 181359](https://github.com/user-attachments/assets/38af88c6-c7fe-448b-b4a5-8a193416fcc8)
 
 ## Development
 
