@@ -3,6 +3,7 @@ import ballerina/http;
 import ballerina/log;
 import ai_gateway.llms;
 import ai_gateway.analytics;
+import ballerina/time;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -52,6 +53,17 @@ function applyGuardrails(string text) returns string|error {
     return textRes;
 }
 
+// Add cache type and storage
+type CacheEntry record {
+    llms:LLMResponse response;
+    int timestamp;
+};
+
+map<CacheEntry> promptCache = {};
+
+// Add cache configuration
+configurable int cacheTTLSeconds = 3600; // Default 1 hour TTL
+
 service / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
@@ -99,12 +111,33 @@ service / on new http:Listener(8080) {
     }
 
     resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
-        // Update request stats
-        lock {
-            requestStats.totalRequests += 1;
-            requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
+        // Check cache first
+        string cacheKey = llmProvider + ":" + payload.prompt;
+        if (promptCache.hasKey(cacheKey)) {
+            CacheEntry entry = promptCache.get(cacheKey);
+            int currentTime = time:utcNow()[0];
+            
+            // Check if cache entry is still valid
+            if (currentTime - entry.timestamp < cacheTTLSeconds) {
+                log:printInfo("Serving response from cache for prompt: " + payload.prompt);
+                // Update cache stats
+                lock {
+                    requestStats.totalRequests += 1;
+                    requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
+                    requestStats.successfulRequests += 1;
+                    tokenStats.totalInputTokens += entry.response.input_tokens;
+                    tokenStats.totalOutputTokens += entry.response.output_tokens;
+                    tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + entry.response.input_tokens;
+                    tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + entry.response.output_tokens;
+                }
+                return entry.response;
+            } else {
+                // Remove expired entry
+                _ = promptCache.remove(cacheKey);
+            }
         }
 
+        // Cache miss - proceed with normal request
         llms:LLMResponse|error response;
         match llmProvider {
             "openai" => {
@@ -140,6 +173,12 @@ service / on new http:Listener(8080) {
             }
             return response;
         }
+
+        // Cache the successful response
+        promptCache[cacheKey] = {
+            response: response,
+            timestamp: time:utcNow()[0]
+        };
 
         lock {
             requestStats.successfulRequests += 1;
@@ -383,6 +422,16 @@ service /admin on new http:Listener(8081) {
         return guardrails;
     }
 
+    // Add cache management endpoints
+    resource function delete cache() returns string {
+        promptCache = {};
+        return "Cache cleared successfully";
+    }
+
+    resource function get cache() returns map<CacheEntry> {
+        return promptCache;
+    }
+
     resource function get stats() returns http:Response|error {
         string[] requestLabels = [];
         int[] requestData = [];
@@ -430,7 +479,8 @@ service /admin on new http:Listener(8081) {
             "inputTokensData": inputTokenData.toString(),
             "outputTokensData": outputTokenData.toString(),
             "errorLabels": errorLabels.toString(),
-            "errorData": errorData.toString()
+            "errorData": errorData.toString(),
+            "cacheSize": promptCache.length().toString()
         };
 
         string html = analytics:renderTemplate(self.statsTemplate, templateValues);
