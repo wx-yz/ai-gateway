@@ -12,30 +12,44 @@ A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini
 
 ## API Endpoints
 
+Two endpoints are provided. Port 8080 for talking to external LLMs via /chat HTTP resource.
+
+Port 8081 for configuring the gateway itself. All admin tasks are done using /admin resource.
+
 ### AI Gateway (Port 8080)
 
 ```
 POST /chat
-Header: llmProvider: "openai" | "anthropic" | "gemini" | "ollama"
+Header: x-llm-provider: "openai" | "anthropic" | "gemini" | "ollama"
 Body: {
     "prompt": "Your prompt here",
-    "temperature": 0.7,
-    "maxTokens": 1000
 }
 ```
 ### Admin API (Port 8081)
 
 #### System Prompt Injection ####
+
+Get current systemprompt
 ```
 GET /admin/systemprompt
+```
+
+Add a system prompt to all outgoing prompts to LLM
+```
 POST /admin/systemprompt
 {
-    "prompt": "You are a helpful assistant..."
+    "prompt": "Respond only in Japanese"
 }
 ```
 #### Guardrails Configuration ####
+
+Get currently configured guardrails
 ```
 GET /admin/guardrails
+```
+
+Add guardrails
+```
 POST /admin/guardrails
 {
     "bannedPhrases": ["harmful", "inappropriate"],
@@ -47,11 +61,14 @@ POST /admin/guardrails
 ```
 
 #### Analytics Dashboard ####
+HTML dashboard that displaying current gateway stats
 ```
 GET /admin/stats
 ```
 
 ## Configuration ##
+
+At least one LLM config is mandatory. Checked at server startup
 
 Create a `Config.toml` file:
 ```
@@ -137,6 +154,6 @@ At this point, removed the system prompt and it defauts to English. Now sending 
 ## Development
 
 ```bash
-# Run the gateway
-bal run
+# Build and run the gateway
+% bal run
 ```
