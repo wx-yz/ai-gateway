@@ -137,62 +137,99 @@ service / on new http:Listener(8080) {
             }
         }
 
-        // Cache miss - proceed with normal request
-        llms:LLMResponse|error response;
-        match llmProvider {
-            "openai" => {
-                if self.openaiClient == () {
-                    return error("OpenAI client is not initialized");
+        // Get list of available providers
+        string[] availableProviders = [];
+        if self.openaiClient != () {
+            availableProviders.push("openai");
+        }
+        if self.anthropicClient != () {
+            availableProviders.push("anthropic");
+        }
+        if self.geminiClient != () {
+            availableProviders.push("gemini");
+        }
+        if self.ollamaClient != () {
+            availableProviders.push("ollama");
+        }
+
+        // Only attempt failover if we have 2 or more providers
+        boolean enableFailover = availableProviders.length() >= 2;
+        
+        // Try primary provider first
+        llms:LLMResponse|error response = self.tryProvider(llmProvider, payload);
+        
+        if response is error && enableFailover {
+            log:printWarn(string `Primary provider ${llmProvider} failed with error: ${response.message()}`);
+            
+            // Try other providers
+            foreach string provider in availableProviders {
+                if provider != llmProvider {
+                    log:printInfo(string `Attempting failover to provider: ${provider}`);
+                    llms:LLMResponse|error failoverResponse = self.tryProvider(provider, payload);
+                    if failoverResponse !is error {
+                        response = failoverResponse;
+                        log:printInfo(string `Successfully failed over to ${provider}`);
+                        break;
+                    }
+                    log:printWarn(string `Failover attempt to ${provider} failed: ${failoverResponse.message()}`);
+                    
+                    if response !is error {
+                        log:printInfo(string `Successfully failed over to ${provider}`);
+                        break;
+                    }
+                    log:printWarn(string `Failover attempt to ${provider} failed: ${response.message()}`);
                 }
-                response = self.handleOpenAI(payload);
-            }
-            "anthropic" => {
-                response = self.handleAnthropic(payload);
-            }
-            "gemini" => {
-                response = self.handleGemini(payload);
-            }
-            "ollama" => {
-                response = self.handleOllama(payload);
-            }
-            _ => {
-                response = error("Unsupported LLM provider");
             }
         }
 
         if response is error {
             lock {
+                requestStats.totalRequests += 1;
                 requestStats.failedRequests += 1;
-                requestStats.errorsByProvider[llmProvider] = (requestStats.errorsByProvider[llmProvider] ?: 0) + 1;
-                errorStats.totalErrors += 1;
-                errorStats.errorsByType[response.message()] = (errorStats.errorsByType[response.message()] ?: 0) + 1;
-                errorStats.recentErrors.push(response.message());
-                if (errorStats.recentErrors.length() > 10) {
-                    _ = errorStats.recentErrors.shift();
-                }
             }
             return response;
         }
 
-        // Cache the successful response
+        // Cache successful response
         promptCache[cacheKey] = {
             response: response,
             timestamp: time:utcNow()[0]
         };
 
-        lock {
-            requestStats.successfulRequests += 1;
-            tokenStats.totalInputTokens += response.input_tokens;
-            tokenStats.totalOutputTokens += response.output_tokens;
-            tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + response.input_tokens;
-            tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + response.output_tokens;
-        }
-
+        // Update stats...
         return response;
     }
 
-    private function handleOpenAI(llms:LLMRequest req) returns llms:LLMResponse|error {
-        // check if openAIConfig and openaiClient are not null
+    // Helper function to try a specific provider
+    private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
+        match provider {
+            "openai" => {
+                if self.openaiClient is http:Client {
+                    
+                    return check self.handleOpenAIRequest(<http:Client>self.openaiClient, payload);
+                }
+            }
+            "anthropic" => {
+                if self.anthropicClient is http:Client {
+                    return check self.handleAnthropicRequest(<http:Client>self.anthropicClient, payload);
+                }
+            }
+            "gemini" => {
+                if self.geminiClient is http:Client {
+                    return check self.handleGeminiRequest(<http:Client>self.geminiClient, payload);
+                }
+            }
+            "ollama" => {
+                if self.ollamaClient is http:Client {
+                    return check self.handleOllamaRequest(<http:Client>self.ollamaClient, payload);
+                }
+            }
+        }
+        return error("Provider not configured: " + provider);
+    }
+
+    private function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+        // check if openAIConfig is not null
         if openAIConfig == () {
             return error("OpenAI is not configured");
         }
@@ -213,8 +250,7 @@ service / on new http:Listener(8080) {
             "max_tokens": req.maxTokens ?: 1000
         };
 
-        http:Client openaiClient = check self.openaiClient.ensureType();
-        if openAIConfig is llms:OpenAIConfig && openAIConfig?.apiKey != "" {
+        if openAIConfig?.apiKey != "" {
             map<string|string[]> headers = { "Authorization": "Bearer " + (openAIConfig?.apiKey ?: "") };
             http:Response response = check openaiClient->post("/v1/chat/completions", openAIPayload, headers);
 
@@ -235,12 +271,10 @@ service / on new http:Listener(8080) {
         }
     }
 
-    private function handleOllama(llms:LLMRequest req) returns llms:LLMResponse|error {
-        // check if ollamaAIConfig and openaiClient are not null
+    private function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) returns llms:LLMResponse|error {
         if ollamaConfig == () {
             return error("Ollama is not configured");
         }
-        // Transform to OpenAI format
         json ollamaPayload = {
             "model": ollamaConfig?.model,
             "messages": [
@@ -256,8 +290,7 @@ service / on new http:Listener(8080) {
             "stream": false
         };
 
-        http:Client ollamaClient = check self.ollamaClient.ensureType();
-        if ollamaConfig is llms:OllamaConfig && ollamaConfig?.apiKey != "" {
+        if ollamaConfig?.apiKey != "" {
             map<string|string[]> headers = { "Authorization": "Bearer " + (ollamaConfig?.apiKey ?: "") };
 
             http:Response response = check ollamaClient->post("/api/chat", ollamaPayload, headers);
@@ -280,11 +313,10 @@ service / on new http:Listener(8080) {
         }
     }    
 
-    private function handleAnthropic(llms:LLMRequest req) returns llms:LLMResponse|error {
+    private function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req) returns llms:LLMResponse|error {
         if anthropicConfig == () {
             return error("Anthropic is not configured");
         }
-        // Transform to Anthropic format
         json anthropicPayload = {
             "model": anthropicConfig?.model,
             "messages": [
@@ -300,8 +332,7 @@ service / on new http:Listener(8080) {
             "max_tokens": req.maxTokens ?: 1000
         };
 
-        http:Client anthropicClient = check self.anthropicClient.ensureType();
-        if anthropicConfig is llms:AnthropicConfig && anthropicConfig?.apiKey != "" {
+        if anthropicConfig?.apiKey != "" {
             map<string|string[]> headers = { 
                 "Authorization": "Bearer " + (anthropicConfig?.apiKey ?: ""),
                 "anthropic-version": "2023-06-01"
@@ -326,9 +357,9 @@ service / on new http:Listener(8080) {
         }
     }
 
-    private function handleGemini(llms:LLMRequest req) returns llms:LLMResponse|error {
+    private function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
         if geminiConfig == () {
-            return error("Anthropic is not configured");
+            return error("Gemini is not configured");
         }
         json geminiPayload = {
             "model": geminiConfig?.model,
@@ -346,8 +377,7 @@ service / on new http:Listener(8080) {
             "max_tokens": req.maxTokens ?: 1000
         };
 
-        http:Client geminiClient = check self.geminiClient.ensureType();
-        if geminiConfig is llms:GeminiConfig && geminiConfig?.apiKey != "" {
+        if geminiConfig?.apiKey != "" {
             map<string|string[]> headers = { "Authorization": "Bearer " + (geminiConfig?.apiKey ?: "") };
 
             http:Response response = check geminiClient->post(":chatCompletions", geminiPayload, headers);

@@ -6,6 +6,7 @@ A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, or Ollama
 - **System Prompts**: Inject system prompts into all LLM requests
+- **Cache**: Cache successful responses to improve performance
 - **Response Guardrails**: Configure content filtering and response constraints
 - **Analytics Dashboard**: Monitor usage, tokens, and errors with visual charts
 - **Administrative Controls**: Configure gateway behavior via admin API
