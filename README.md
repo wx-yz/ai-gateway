@@ -5,7 +5,7 @@ A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini
 ## Features Highlights
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, or Ollama
-- **Automatic Failover**: When 3+ providers are configured, automatically fails over to alternative providers if primary provider fails
+- **Automatic Failover**: When 2+ providers are configured, automatically fails over to alternative providers if primary provider fails
 - **Response Caching**: In-memory cache with configurable TTL for improved performance and reduced API costs
 - **System Prompts**: Inject system prompts into all LLM requests
 - **Response Guardrails**: Configure content filtering and response constraints
