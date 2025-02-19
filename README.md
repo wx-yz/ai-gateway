@@ -2,14 +2,59 @@
 
 A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini, Ollama) with built-in analytics, guardrails, and administrative controls.
 
-## Features
+## Features Highlights
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, or Ollama
+- **Automatic Failover**: When 3+ providers are configured, automatically fails over to alternative providers if primary provider fails
+- **Response Caching**: In-memory cache with configurable TTL for improved performance and reduced API costs
 - **System Prompts**: Inject system prompts into all LLM requests
-- **Cache**: Cache successful responses to improve performance
 - **Response Guardrails**: Configure content filtering and response constraints
 - **Analytics Dashboard**: Monitor usage, tokens, and errors with visual charts
 - **Administrative Controls**: Configure gateway behavior via admin API
+
+## Features in Detail
+
+### Multiple LLM Providers
+- Support for multiple LLM providers (OpenAI, Anthropic, Gemini, Ollama)
+- Unified API for all providers
+- Automatic failover to alternative providers if primary provider fails
+
+### Caching
+- In-memory cache for LLM responses
+- Cache key combines provider and prompt
+- Configurable TTL (default: 1 hour)
+- Cache hits are logged for monitoring
+- Cache statistics available in admin dashboard
+
+### Failover Support
+- Automatically activates when 3+ providers are configured
+- Attempts alternative providers if primary provider fails
+- Logs failover attempts and results
+- Maintains original error if all providers fail
+
+### Guardrails
+- Content filtering with banned phrases
+- Response length constraints
+- Optional disclaimer injection
+- Applied to all responses (including cached ones)
+
+### System Prompts
+- Inject system prompts into all LLM requests
+- Configured per provider
+- Can be overridden on a per-request basis
+
+### Analytics Dashboard
+- Real-time usage metrics
+- Token consumption charts
+- Error rate breakdown
+- Cache hit ratios
+- Provider performance stats
+
+### Administrative Controls
+- Configure system prompts
+- Set guardrails
+- Clear cache
+- View analytics dashboard
 
 ## API Endpoints
 
@@ -49,7 +94,7 @@ Get currently configured guardrails
 GET /admin/guardrails
 ```
 
-Add guardrails
+Add guardrails. Currently only banned phrases and a disclaimer are supported.
 ```
 POST /admin/guardrails
 {
@@ -59,6 +104,17 @@ POST /admin/guardrails
     "requireDisclaimer": true,
     "disclaimer": "AI-generated response"
 }
+```
+
+#### Cache Management
+View cache contents
+```
+GET /admin/cache      # View cache 
+```
+
+Clear cache
+```
+DELETE /admin/cache   # Clear cache
 ```
 
 #### Analytics Dashboard ####
@@ -122,6 +178,11 @@ curl -X POST http://localhost:8081/admin/guardrails \
     "requireDisclaimer": true,
     "disclaimer": "This is an AI-generated response"
   }'
+```
+
+4. Clear cache:
+```bash
+curl -X DELETE http://localhost:8081/admin/cache
 ```
 
 ## Testing screenshots ##
