@@ -3,7 +3,9 @@ import ballerina/http;
 import ballerina/log;
 import ai_gateway.llms;
 import ai_gateway.analytics;
+import ai_gateway.logging;
 import ballerina/time;
+import ballerina/uuid;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -64,6 +66,55 @@ map<CacheEntry> promptCache = {};
 // Add cache configuration
 configurable int cacheTTLSeconds = 3600; // Default 1 hour TTL
 
+// Using this to read initial logging configuration from system startup
+// When the configurable is read from Config.toml at system startup, cannot assign or update
+// that value later using the /admin service. So copying this at init()
+configurable logging:LoggingConfig defaultLoggingConfig = {};
+
+// Add logging configuration
+configurable boolean & readonly verboseLogging = false;
+logging:LoggingConfig loggingConfig = {
+    enableSplunk: false,
+    enableDatadog: false,
+    enableElasticSearch: false,
+    openTelemetryEndpoint: "",
+    splunkEndpoint: "",
+    datadogEndpoint: "",
+    elasticSearchEndpoint: ""
+};
+
+// Add logging state
+boolean isVerboseLogging = verboseLogging;
+
+// Add logging helper function
+function logEvent(string level, string component, string message, map<any> metadata = {}) {
+    if (!isVerboseLogging && level == "DEBUG") {
+        return;
+    }
+
+    json logEntry = {
+        timestamp: time:utcNow(),
+        level: level,
+        component: component,
+        message: message,
+        metadata: metadata.toString()
+    };
+
+    // Always log to console
+    log:printInfo(logEntry.toString());
+
+    // Publish to configured services
+    if (loggingConfig.enableSplunk) {
+        _ = start logging:publishToSplunk(loggingConfig, logEntry);
+    }
+    if (loggingConfig.enableDatadog) {
+        _ = start logging:publishToDatadog(loggingConfig, logEntry);
+    }
+    if (loggingConfig.enableElasticSearch) {
+        _ = start logging:publishToElasticSearch(loggingConfig, logEntry);
+    }
+}
+
 service / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
@@ -71,6 +122,9 @@ service / on new http:Listener(8080) {
     private http:Client? ollamaClient = ();
 
     function init() returns error? {
+        // Read initial logging configuration
+        loggingConfig = defaultLoggingConfig;
+
         // Check if at least one provider is configured
         if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () {
             return error("At least one LLM provider must be configured");
@@ -111,14 +165,30 @@ service / on new http:Listener(8080) {
     }
 
     resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
+        string requestId = uuid:createType1AsString();
+        logEvent("INFO", "chat", "Received chat request", {
+            requestId: requestId,
+            provider: llmProvider,
+            prompt: payload.prompt
+        });
+
         // Check cache first
         string cacheKey = llmProvider + ":" + payload.prompt;
         if (promptCache.hasKey(cacheKey)) {
+            logEvent("DEBUG", "cache", "Checking cache entry", {
+                requestId: requestId,
+                cacheKey: cacheKey
+            });
+            
             CacheEntry entry = promptCache.get(cacheKey);
             int currentTime = time:utcNow()[0];
             
             // Check if cache entry is still valid
             if (currentTime - entry.timestamp < cacheTTLSeconds) {
+                logEvent("INFO", "cache", "Cache hit", {
+                    requestId: requestId,
+                    cacheKey: cacheKey
+                });
                 log:printInfo("Serving response from cache for prompt: " + payload.prompt);
                 // Update cache stats
                 lock {
@@ -202,6 +272,11 @@ service / on new http:Listener(8080) {
 
     // Helper function to try a specific provider
     private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
+        logEvent("DEBUG", "provider", "Attempting provider request", {
+            provider: provider,
+            prompt: payload.prompt
+        });
+        
         match provider {
             "openai" => {
                 if self.openaiClient is http:Client {
@@ -519,5 +594,26 @@ service /admin on new http:Listener(8081) {
         response.setHeader("Content-Type", "text/html");
         response.setPayload(html);
         return response;
+    }
+
+    // Add logging configuration endpoint
+    resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns string|error {
+        loggingConfig = <logging:LoggingConfig & readonly>logConfig;
+        return "Logging configuration updated successfully";
+    }
+
+    resource function get logging() returns logging:LoggingConfig {
+        return loggingConfig;
+    }
+
+    // Add verbose logging toggle
+    resource function post verbose(@http:Payload boolean enabled) returns string {
+        isVerboseLogging = enabled;
+        logEvent("INFO", "admin", "Verbose logging " + (enabled ? "enabled" : "disabled"));
+        return "Verbose logging " + (enabled ? "enabled" : "disabled");
+    }
+
+    resource function get verbose() returns boolean {
+        return isVerboseLogging;
     }
 }
