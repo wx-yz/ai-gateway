@@ -17,6 +17,7 @@ configurable llms:OpenAIConfig? & readonly cohereConfig = ();
 type GatewayConfig record {
     int port = 8080;
     int adminPort = 8081;
+    boolean verboseLogging = false;
 };
 
 // Gateway configuration
@@ -81,8 +82,6 @@ configurable int cacheTTLSeconds = 3600; // Default 1 hour TTL
 // that value later using the /admin service. So copying this at init()
 configurable logging:LoggingConfig defaultLoggingConfig = {};
 
-// Add logging configuration
-configurable boolean & readonly verboseLogging = false;
 logging:LoggingConfig loggingConfig = {
     enableSplunk: false,
     enableDatadog: false,
@@ -94,7 +93,7 @@ logging:LoggingConfig loggingConfig = {
 };
 
 // Add logging state
-boolean isVerboseLogging = verboseLogging;
+boolean isVerboseLogging = gateway.verboseLogging;
 
 // Add logging helper function
 function logEvent(string level, string component, string message, map<any> metadata = {}) {
@@ -125,7 +124,7 @@ function logEvent(string level, string component, string message, map<any> metad
     }
 }
 
-service / on new http:Listener(gateway.port) {
+service / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
     private http:Client? geminiClient = ();
@@ -650,7 +649,7 @@ analytics:ErrorStats errorStats = {
 };
 
 // Add new admin service
-service /admin on new http:Listener(gateway.adminPort) {
+service /admin on new http:Listener(8081) {
     // Template HTML for analytics
     string statsTemplate = "";
 
