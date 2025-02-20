@@ -11,6 +11,16 @@ configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
 configurable llms:GeminiConfig? & readonly geminiConfig = ();
 configurable llms:OllamaConfig? & readonly ollamaConfig = ();
+configurable llms:OpenAIConfig? & readonly mistralConfig = ();
+configurable llms:OpenAIConfig? & readonly cohereConfig = ();
+
+type GatewayConfig record {
+    int port = 8080;
+    int adminPort = 8081;
+};
+
+// Gateway configuration
+configurable GatewayConfig gateway = {};
 
 // Add system prompt storage
 string systemPrompt = "";
@@ -115,18 +125,20 @@ function logEvent(string level, string component, string message, map<any> metad
     }
 }
 
-service / on new http:Listener(8080) {
+service / on new http:Listener(gateway.port) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
     private http:Client? geminiClient = ();
     private http:Client? ollamaClient = ();
+    private http:Client? mistralClient = ();
+    private http:Client? cohereClient = ();
 
     function init() returns error? {
         // Read initial logging configuration
         loggingConfig = defaultLoggingConfig;
 
         // Check if at least one provider is configured
-        if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () {
+        if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
             return error("At least one LLM provider must be configured");
         }
 
@@ -162,6 +174,23 @@ service / on new http:Listener(8080) {
                 self.ollamaClient = check new (endpoint);
             }
         }
+        if mistralConfig?.endpoint != () {
+            string endpoint = mistralConfig?.endpoint ?: "";
+            if (endpoint == "") {
+                return error("Mistral endpoint is required");
+            } else {
+                self.mistralClient = check new (endpoint);
+            }
+        }
+        if cohereConfig?.endpoint != () {
+            string endpoint = cohereConfig?.endpoint ?: "";
+            if (endpoint == "") {
+                return error("Cohere endpoint is required");
+            } else {
+                self.cohereClient = check new (endpoint);
+            }
+        }
+        log:printInfo("AI Gateway ready");
     }
 
     resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
@@ -226,6 +255,12 @@ service / on new http:Listener(8080) {
         if self.ollamaClient != () {
             availableProviders.push("ollama");
         }
+        if self.mistralClient != () {
+            availableProviders.push("mistral");
+        }
+        if self.cohereClient != () {
+            availableProviders.push("cohere");
+        }
 
         // Only attempt failover if we have 2 or more providers
         boolean enableFailover = availableProviders.length() >= 2;
@@ -281,81 +316,47 @@ service / on new http:Listener(8080) {
             provider: provider,
             prompt: payload.prompt
         });
-        
-        match provider {
-            "openai" => {
-                if self.openaiClient is http:Client {
-                    llms:LLMResponse|error response = self.handleOpenAIRequest(<http:Client>self.openaiClient, payload);
-                    if response is llms:LLMResponse {
-                        // Update stats for successful request
-                        lock {
-                            requestStats.totalRequests += 1;
-                            requestStats.successfulRequests += 1;
-                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                            tokenStats.totalInputTokens += response.input_tokens;
-                            tokenStats.totalOutputTokens += response.output_tokens;
-                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
-                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
-                        }
-                    }
-                    return response;
+
+        // Map of provider to client
+        map<http:Client?> clientMap = {
+            "openai": self.openaiClient,
+            "anthropic": self.anthropicClient,
+            "gemini": self.geminiClient,
+            "ollama": self.ollamaClient,
+            "mistral": self.mistralClient,
+            "cohere": self.cohereClient
+        };
+
+        // Map of provider to handler function
+        map<function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
+            "openai": self.handleOpenAIRequest,
+            "anthropic": self.handleAnthropicRequest,
+            "gemini": self.handleGeminiRequest,
+            "ollama": self.handleOllamaRequest,
+            "mistral": self.handleMistralRequest,
+            "cohere": self.handleCohereRequest
+        };
+
+        http:Client? llmClient = clientMap[provider];
+        var handler = handlerMap[provider];
+
+        if llmClient is http:Client && handler is function {
+            llms:LLMResponse|error response = handler(llmClient, payload);
+            if response is llms:LLMResponse {
+                // Update stats for successful request
+                lock {
+                    requestStats.totalRequests += 1;
+                    requestStats.successfulRequests += 1;
+                    requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                    tokenStats.totalInputTokens += response.input_tokens;
+                    tokenStats.totalOutputTokens += response.output_tokens;
+                    tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
+                    tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
                 }
             }
-            "anthropic" => {
-                if self.anthropicClient is http:Client {
-                    llms:LLMResponse|error response = self.handleAnthropicRequest(<http:Client>self.anthropicClient, payload);
-                    if response is llms:LLMResponse {
-                        // Update stats for successful request
-                        lock {
-                            requestStats.totalRequests += 1;
-                            requestStats.successfulRequests += 1;
-                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                            tokenStats.totalInputTokens += response.input_tokens;
-                            tokenStats.totalOutputTokens += response.output_tokens;
-                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
-                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
-                        }
-                    }
-                    return response;
-                }
-            }
-            "gemini" => {
-                if self.geminiClient is http:Client {
-                    llms:LLMResponse|error response = self.handleGeminiRequest(<http:Client>self.geminiClient, payload);
-                    if response is llms:LLMResponse {
-                        // Update stats for successful request
-                        lock {
-                            requestStats.totalRequests += 1;
-                            requestStats.successfulRequests += 1;
-                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                            tokenStats.totalInputTokens += response.input_tokens;
-                            tokenStats.totalOutputTokens += response.output_tokens;
-                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
-                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
-                        }
-                    }
-                    return response;
-                }
-            }
-            "ollama" => {
-                if self.ollamaClient is http:Client {
-                    llms:LLMResponse|error response = self.handleOllamaRequest(<http:Client>self.ollamaClient, payload);
-                    if response is llms:LLMResponse {
-                        // Update stats for successful request
-                        lock {
-                            requestStats.totalRequests += 1;
-                            requestStats.successfulRequests += 1;
-                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                            tokenStats.totalInputTokens += response.input_tokens;
-                            tokenStats.totalOutputTokens += response.output_tokens;
-                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
-                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
-                        }
-                    }
-                    return response;
-                }
-            }
+            return response;
         }
+        
         return error("Provider not configured: " + provider);
     }
 
@@ -530,6 +531,98 @@ service / on new http:Listener(8080) {
             return error("Gemini configuration is invalid");
         }
     }
+
+    private function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+        if mistralConfig == () {
+            return error("Mistral is not configured");
+        }
+        json mistralPayload = {
+            "model": mistralConfig?.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": systemPrompt
+                },
+                {
+                    "role": "user", 
+                    "content": req.prompt
+                }
+            ],
+            "temperature": req.temperature ?: 0.7,
+            "max_tokens": req.maxTokens ?: 1000
+        };
+
+        if mistralConfig?.apiKey != "" {
+            map<string|string[]> headers = { "Authorization": "Bearer " + (mistralConfig?.apiKey ?: "") };
+            http:Response response = check mistralClient->post("/v1/chat/completions", mistralPayload, headers);
+
+            json responsePayload = check response.getJsonPayload();
+            log:printInfo("Mistral response: " + responsePayload.toString());
+            llms:OpenAIResponse mistralResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
+
+            // Apply guardrails before returning
+            string guardedText = check applyGuardrails(mistralResponse.choices[0].message.content);
+            return {
+                text: guardedText,
+                input_tokens: mistralResponse.usage.prompt_tokens,
+                output_tokens: mistralResponse.usage.completion_tokens,
+                model: mistralResponse.model,
+                provider: "mistral"
+            };
+        } else {
+            return error("Mistral configuration is invalid");
+        }
+    }
+
+    private function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+        if cohereConfig == () {
+            return error("Cohere is not configured");
+        }
+        string cohereSystemPromt = "test";
+        if (systemPrompt != "") {
+            cohereSystemPromt = systemPrompt;
+        }
+        json coherePayload = {
+            "message": req.prompt,
+            "chat_history": [{
+                "role": "USER",
+                "message": req.prompt
+            },
+            {
+                "role": "SYSTEM",
+                "message": cohereSystemPromt
+            }],  
+            "temperature": req.temperature ?: 0.7, 
+            "max_tokens": req.maxTokens ?: 1000,                     
+            "model": cohereConfig?.model,
+            "preamble": "You are an AI-assistant chatbot. You are trained to assist users by providing thorough and helpful responses to their queries."
+        };
+
+        if cohereConfig?.apiKey != "" {
+            map<string|string[]> headers = { 
+                "Authorization": "Bearer " + (cohereConfig?.apiKey ?: ""),
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            };
+            http:Response response = check cohereClient->post("/v1/chat", coherePayload, headers);
+
+            json responsePayload = check response.getJsonPayload();
+            log:printInfo("Cohere response: " + responsePayload.toString());
+            llms:CohereResponse cohereResponse = check responsePayload.cloneWithType(llms:CohereResponse);
+            
+            // Apply guardrails before returning
+            string guardedText = check applyGuardrails(cohereResponse.text);
+            return {
+                text: guardedText,
+                input_tokens: cohereResponse.meta.tokens.input_tokens,
+                output_tokens: cohereResponse.meta.billed_units.output_tokens,
+                model: cohereConfig?.model ?: "",
+                provider: "cohere"
+            };
+        } else {
+            return error("Cohere configuration is invalid");
+        }
+    }
 }
 
 // Analytics storage
@@ -557,7 +650,7 @@ analytics:ErrorStats errorStats = {
 };
 
 // Add new admin service
-service /admin on new http:Listener(8081) {
+service /admin on new http:Listener(gateway.adminPort) {
     // Template HTML for analytics
     string statsTemplate = "";
 

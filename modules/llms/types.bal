@@ -90,3 +90,21 @@ public type OllamaResponse record {
     int prompt_eval_count;
     int eval_count;
 };
+
+// Handle Cohere response
+public type CohereBilledUnits record {
+    int input_tokens;
+    int output_tokens;
+};
+public type CohereTokens record {
+    int input_tokens;
+    int output_tokens;
+};
+public type CohereResponseUsage record {
+    CohereBilledUnits billed_units;
+    CohereTokens tokens;
+};
+public type CohereResponse record {
+    string text;
+    CohereResponseUsage meta;
+};
