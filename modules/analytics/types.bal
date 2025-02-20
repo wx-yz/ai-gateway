@@ -1,11 +1,13 @@
 // Add analytics types
-public type RequestStats record {
+public type RequestStats record {|
     int totalRequests;
     int successfulRequests;
     int failedRequests;
     map<int> requestsByProvider;
     map<int> errorsByProvider;
-};
+    int cacheHits;
+    int cacheMisses;
+|};
 
 public type TokenStats record {
     int totalInputTokens;

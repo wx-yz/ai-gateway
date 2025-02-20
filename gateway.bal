@@ -189,10 +189,10 @@ service / on new http:Listener(8080) {
                     requestId: requestId,
                     cacheKey: cacheKey
                 });
-                log:printInfo("Serving response from cache for prompt: " + payload.prompt);
                 // Update cache stats
                 lock {
                     requestStats.totalRequests += 1;
+                    requestStats.cacheHits += 1;
                     requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
                     requestStats.successfulRequests += 1;
                     tokenStats.totalInputTokens += entry.response.input_tokens;
@@ -205,6 +205,11 @@ service / on new http:Listener(8080) {
                 // Remove expired entry
                 _ = promptCache.remove(cacheKey);
             }
+        }
+
+        // Cache miss
+        lock {
+            requestStats.cacheMisses += 1;
         }
 
         // Get list of available providers
@@ -280,23 +285,74 @@ service / on new http:Listener(8080) {
         match provider {
             "openai" => {
                 if self.openaiClient is http:Client {
-                    
-                    return check self.handleOpenAIRequest(<http:Client>self.openaiClient, payload);
+                    llms:LLMResponse|error response = self.handleOpenAIRequest(<http:Client>self.openaiClient, payload);
+                    if response is llms:LLMResponse {
+                        // Update stats for successful request
+                        lock {
+                            requestStats.totalRequests += 1;
+                            requestStats.successfulRequests += 1;
+                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                            tokenStats.totalInputTokens += response.input_tokens;
+                            tokenStats.totalOutputTokens += response.output_tokens;
+                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
+                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
+                        }
+                    }
+                    return response;
                 }
             }
             "anthropic" => {
                 if self.anthropicClient is http:Client {
-                    return check self.handleAnthropicRequest(<http:Client>self.anthropicClient, payload);
+                    llms:LLMResponse|error response = self.handleAnthropicRequest(<http:Client>self.anthropicClient, payload);
+                    if response is llms:LLMResponse {
+                        // Update stats for successful request
+                        lock {
+                            requestStats.totalRequests += 1;
+                            requestStats.successfulRequests += 1;
+                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                            tokenStats.totalInputTokens += response.input_tokens;
+                            tokenStats.totalOutputTokens += response.output_tokens;
+                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
+                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
+                        }
+                    }
+                    return response;
                 }
             }
             "gemini" => {
                 if self.geminiClient is http:Client {
-                    return check self.handleGeminiRequest(<http:Client>self.geminiClient, payload);
+                    llms:LLMResponse|error response = self.handleGeminiRequest(<http:Client>self.geminiClient, payload);
+                    if response is llms:LLMResponse {
+                        // Update stats for successful request
+                        lock {
+                            requestStats.totalRequests += 1;
+                            requestStats.successfulRequests += 1;
+                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                            tokenStats.totalInputTokens += response.input_tokens;
+                            tokenStats.totalOutputTokens += response.output_tokens;
+                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
+                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
+                        }
+                    }
+                    return response;
                 }
             }
             "ollama" => {
                 if self.ollamaClient is http:Client {
-                    return check self.handleOllamaRequest(<http:Client>self.ollamaClient, payload);
+                    llms:LLMResponse|error response = self.handleOllamaRequest(<http:Client>self.ollamaClient, payload);
+                    if response is llms:LLMResponse {
+                        // Update stats for successful request
+                        lock {
+                            requestStats.totalRequests += 1;
+                            requestStats.successfulRequests += 1;
+                            requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                            tokenStats.totalInputTokens += response.input_tokens;
+                            tokenStats.totalOutputTokens += response.output_tokens;
+                            tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
+                            tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
+                        }
+                    }
+                    return response;
                 }
             }
         }
@@ -482,7 +538,9 @@ analytics:RequestStats requestStats = {
     successfulRequests: 0,
     failedRequests: 0,
     requestsByProvider: {},
-    errorsByProvider: {}
+    errorsByProvider: {},
+    cacheHits: 0,
+    cacheMisses: 0
 };
 
 analytics:TokenStats tokenStats = {
@@ -569,11 +627,20 @@ service /admin on new http:Listener(8081) {
             i = i + 1;
         }
 
+        // Calculate cache hit rate
+        float cacheHitRate = 0.0;
+        if (requestStats.totalRequests > 0) {
+            cacheHitRate = <float>requestStats.cacheHits / <float>requestStats.totalRequests * 100.0;
+        }
+
         // Prepare data for template
         map<string> templateValues = {
             "totalRequests": requestStats.totalRequests.toString(),
             "successfulRequests": requestStats.successfulRequests.toString(),
             "failedRequests": requestStats.failedRequests.toString(),
+            "cacheHits": requestStats.cacheHits.toString(),
+            "cacheMisses": requestStats.cacheMisses.toString(),
+            "cacheHitRate": cacheHitRate.toFixedString(2) + "%",
             "totalInputTokens": tokenStats.totalInputTokens.toString(),
             "totalOutputTokens": tokenStats.totalOutputTokens.toString(),
             "totalErrors": errorStats.totalErrors.toString(),

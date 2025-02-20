@@ -110,6 +110,16 @@
             <ul>{{recentErrors}}</ul>
             <canvas id="errorsChart"></canvas>
         </div>
+
+        <!-- Cache Stats Card -->
+        <div class="stats-card">
+            <h2><i class="fas fa-database"></i>Cache Statistics</h2>
+            <ul>
+                <li><i class="fas fa-check-circle"></i> Cache Hits: {{cacheHits}}</li>
+                <li><i class="fas fa-times-circle"></i> Cache Misses: {{cacheMisses}}</li>
+                <li><i class="fas fa-percentage"></i> Cache Hit Rate: {{cacheHitRate}}</li>
+            </ul>
+        </div>
     </div>
 
     <!-- Rest of the script section remains unchanged -->
