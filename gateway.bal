@@ -134,6 +134,62 @@ function logEvent(string level, string component, string message, map<json> meta
     }
 }
 
+// Add rate limiting types and storage
+type RateLimitPlan record {|
+    string name;
+    int requestsPerWindow;
+    int windowSeconds;
+|};
+
+type RateLimitState record {|
+    int requests;
+    int windowStart;
+|};
+
+// Store rate limit states by IP
+map<RateLimitState> rateLimitStates = {};
+RateLimitPlan? currentPlan = ();
+
+// Add rate limiting function
+function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
+    if currentPlan is () {
+        return [true, 0, 0, 0];
+    }
+
+    RateLimitPlan plan = <RateLimitPlan>currentPlan;
+    int currentTime = time:utcNow()[0];
+    
+    lock {
+        RateLimitState state = rateLimitStates[clientIP] ?: {
+            requests: 0,
+            windowStart: currentTime
+        };
+
+        // Check if we need to reset window
+        if (currentTime - state.windowStart >= plan.windowSeconds) {
+            state = {
+                requests: 0,
+                windowStart: currentTime
+            };
+        }
+
+        // Calculate remaining quota and time
+        int remaining = plan.requestsPerWindow - state.requests;
+        int resetSeconds = plan.windowSeconds - (currentTime - state.windowStart);
+        
+        if (state.requests >= plan.requestsPerWindow) {
+            rateLimitStates[clientIP] = state;
+            return [false, plan.requestsPerWindow, remaining, resetSeconds];
+        }
+
+        // Increment request count
+        state.requests += 1;
+        rateLimitStates[clientIP] = state;
+        
+        return [true, plan.requestsPerWindow, remaining - 1, resetSeconds];
+    }
+}
+
 service / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
@@ -217,7 +273,38 @@ service / on new http:Listener(8080) {
         });
     }
 
-    resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
+    resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, 
+                              @http:Payload llms:LLMRequest payload,
+                              http:Request request) returns error|http:Response|llms:LLMResponse {
+        string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
+
+        // TODO: Use the client IP address from the request
+        string clientIP = "";
+        if forwardedHeader is string {
+            clientIP = forwardedHeader;
+        }
+        // string clientIP = request.getHeader("X-Forwarded-For") ?: request.remoteAddress;
+        
+        // Check rate limit
+        // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
+        [boolean, int, int, int] rateLimitResponse = check checkRateLimit(clientIP);
+        boolean allowed = rateLimitResponse[0];
+        int rateLimit = rateLimitResponse[1];
+        int remaining = rateLimitResponse[2];
+        int reset = rateLimitResponse[3];
+        
+        http:Response response = new;       
+        if !allowed {
+            response.statusCode = 429; // Too Many Requests
+            response.setPayload({
+                'error: "Rate limit exceeded",
+                'limit: rateLimit,
+                remaining: remaining,
+                reset: reset
+            });
+            return response;
+        }
+
         string requestId = uuid:createType1AsString();
         logEvent("INFO", "chat", "Received chat request", {
             requestId: requestId,
@@ -253,7 +340,12 @@ service / on new http:Listener(8080) {
                     tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + entry.response.input_tokens;
                     tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + entry.response.output_tokens;
                 }
-                return entry.response;
+                http:Response cachedResponse = new;
+                cachedResponse.setHeader("RateLimit-Limit", rateLimit.toString());
+                cachedResponse.setHeader("RateLimit-Remaining", remaining.toString());
+                cachedResponse.setHeader("RateLimit-Reset", reset.toString());
+                cachedResponse.setPayload(entry.response);
+                return cachedResponse;
             } else {
                 logEvent("DEBUG", "cache", "Cache entry expired", {
                     requestId: requestId,
@@ -295,13 +387,13 @@ service / on new http:Listener(8080) {
         boolean enableFailover = availableProviders.length() >= 2;
         
         // Try primary provider first
-        llms:LLMResponse|error response = self.tryProvider(llmProvider, payload);
+        llms:LLMResponse|error llmResponse = self.tryProvider(llmProvider, payload);
         
-        if response is error && enableFailover {
+        if llmResponse is error && enableFailover {
             logEvent("WARN", "failover", "Primary provider failed", {
                 requestId: requestId,
                 provider: llmProvider,
-                'error: response.message() + ":" + response.detail().toString()
+                'error: llmResponse.message() + ":" + llmResponse.detail().toString()
             });
             
             // Try other providers
@@ -318,7 +410,7 @@ service / on new http:Listener(8080) {
                             requestId: requestId,
                             provider: provider
                         });
-                        response = failoverResponse;
+                        llmResponse = failoverResponse;
                         break;
                     }
                     logEvent("WARN", "failover", "Failover attempt failed", {
@@ -330,23 +422,29 @@ service / on new http:Listener(8080) {
             }
         }
 
-        if response is error {
+        if llmResponse is error {
             logEvent("ERROR", "chat", "All providers failed", {
                 requestId: requestId,
-                'error: response.message() + ":" + response.detail().toString()
+                'error: llmResponse.message() + ":" + llmResponse.detail().toString()
             });
-            return response;
+            return llmResponse;
         }
 
         // Cache successful response
         promptCache[cacheKey] = {
-            response: response,
+            response: llmResponse,
             timestamp: time:utcNow()[0]
         };
         logEvent("DEBUG", "cache", "Cached response", {
             requestId: requestId,
             cacheKey: cacheKey
         });
+
+        // Add rate limit headers to response context
+        response.setHeader("RateLimit-Limit", rateLimit.toString());
+        response.setHeader("RateLimit-Remaining", remaining.toString());
+        response.setHeader("RateLimit-Reset", reset.toString());
+        response.setPayload(llmResponse);
 
         return response;
     }
@@ -872,5 +970,42 @@ service /admin on new http:Listener(8081) {
 
     resource function get verbose() returns boolean {
         return isVerboseLogging;
+    }
+
+    // Get current rate limit plan
+    resource function get ratelimit() returns RateLimitPlan? {
+        return currentPlan;
+    }
+
+    // Update rate limit plan
+    resource function post ratelimit(@http:Payload RateLimitPlan payload) returns string|error {
+        lock {
+            currentPlan = payload;
+            // Clear existing states when plan changes
+            rateLimitStates = {};
+        }
+        
+        logEvent("INFO", "admin", "Rate limit plan updated", {
+            plan: payload.toString()
+        });
+        
+        return "Rate limit plan updated successfully";
+    }
+
+    // Remove rate limiting
+    resource function delete ratelimit() returns string {
+        lock {
+            currentPlan = ();
+            rateLimitStates = {};
+        }
+        
+        logEvent("INFO", "admin", "Rate limiting disabled");
+        
+        return "Rate limiting disabled";
+    }
+
+    // Get current rate limit states (for debugging)
+    resource function get ratelimit/states() returns map<RateLimitState> {
+        return rateLimitStates;
     }
 }
