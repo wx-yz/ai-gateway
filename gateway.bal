@@ -89,7 +89,8 @@ logging:LoggingConfig loggingConfig = {
     openTelemetryEndpoint: "",
     splunkEndpoint: "",
     datadogEndpoint: "",
-    elasticSearchEndpoint: ""
+    elasticSearchEndpoint: "",
+    elasticApiKey: ""
 };
 
 // Add logging state
@@ -102,7 +103,7 @@ function logEvent(string level, string component, string message, map<any> metad
     }
 
     json logEntry = {
-        timestamp: time:utcNow(),
+        timestamp: time:utcToString(time:utcNow()),
         level: level,
         component: component,
         message: message,
@@ -133,20 +134,26 @@ service / on new http:Listener(8080) {
     private http:Client? cohereClient = ();
 
     function init() returns error? {
+        logEvent("INFO", "init", "Initializing AI Gateway");
+        
         // Read initial logging configuration
         loggingConfig = defaultLoggingConfig;
+        logEvent("DEBUG", "init", "Loaded logging configuration", loggingConfig);
 
         // Check if at least one provider is configured
         if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
+            logEvent("ERROR", "init", "No LLM providers configured");
             return error("At least one LLM provider must be configured");
         }
 
         if openAIConfig?.endpoint != () {
             string endpoint = openAIConfig?.endpoint ?: "";
             if (endpoint == "") {
+                logEvent("ERROR", "init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
                 return error("OpenAI endpoint is required");
             } else {
                 self.openaiClient = check new (endpoint);
+                logEvent("INFO", "init", "OpenAI client initialized", {"endpoint": endpoint});
             }
         }
         if anthropicConfig?.endpoint != () {
@@ -189,7 +196,16 @@ service / on new http:Listener(8080) {
                 self.cohereClient = check new (endpoint);
             }
         }
-        log:printInfo("AI Gateway ready");
+        logEvent("INFO", "init", "AI Gateway initialization complete", {
+            "providers": [
+                openAIConfig != () ? "openai" : "",
+                anthropicConfig != () ? "anthropic" : "",
+                geminiConfig != () ? "gemini" : "",
+                ollamaConfig != () ? "ollama" : "",
+                mistralConfig != () ? "mistral" : "",
+                cohereConfig != () ? "cohere" : ""
+            ].filter(p => p != "")
+        });
     }
 
     resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, @http:Payload llms:LLMRequest payload) returns llms:LLMResponse|error {
@@ -230,15 +246,20 @@ service / on new http:Listener(8080) {
                 }
                 return entry.response;
             } else {
-                // Remove expired entry
+                logEvent("DEBUG", "cache", "Cache entry expired", {
+                    requestId: requestId,
+                    cacheKey: cacheKey,
+                    age: currentTime - entry.timestamp
+                });
                 _ = promptCache.remove(cacheKey);
             }
         }
 
         // Cache miss
-        lock {
-            requestStats.cacheMisses += 1;
-        }
+        logEvent("DEBUG", "cache", "Cache miss", {
+            requestId: requestId,
+            cacheKey: cacheKey
+        });
 
         // Get list of available providers
         string[] availableProviders = [];
@@ -268,34 +289,43 @@ service / on new http:Listener(8080) {
         llms:LLMResponse|error response = self.tryProvider(llmProvider, payload);
         
         if response is error && enableFailover {
-            log:printWarn(string `Primary provider ${llmProvider} failed with error: ${response.message()}`);
+            logEvent("WARN", "failover", "Primary provider failed", {
+                requestId: requestId,
+                provider: llmProvider,
+                'error: response.message() + ":" + response.detail().toString()
+            });
             
             // Try other providers
             foreach string provider in availableProviders {
                 if provider != llmProvider {
-                    log:printInfo(string `Attempting failover to provider: ${provider}`);
+                    logEvent("INFO", "failover", "Attempting failover", {
+                        requestId: requestId,
+                        provider: provider
+                    });
+                    
                     llms:LLMResponse|error failoverResponse = self.tryProvider(provider, payload);
                     if failoverResponse !is error {
+                        logEvent("INFO", "failover", "Failover successful", {
+                            requestId: requestId,
+                            provider: provider
+                        });
                         response = failoverResponse;
-                        log:printInfo(string `Successfully failed over to ${provider}`);
                         break;
                     }
-                    log:printWarn(string `Failover attempt to ${provider} failed: ${failoverResponse.message()}`);
-                    
-                    if response !is error {
-                        log:printInfo(string `Successfully failed over to ${provider}`);
-                        break;
-                    }
-                    log:printWarn(string `Failover attempt to ${provider} failed: ${response.message()}`);
+                    logEvent("WARN", "failover", "Failover attempt failed", {
+                        requestId: requestId,
+                        provider: provider,
+                        'error: failoverResponse.message() + ":" + failoverResponse.detail().toString()
+                    });
                 }
             }
         }
 
         if response is error {
-            lock {
-                requestStats.totalRequests += 1;
-                requestStats.failedRequests += 1;
-            }
+            logEvent("ERROR", "chat", "All providers failed", {
+                requestId: requestId,
+                'error: response.message() + ":" + response.detail().toString()
+            });
             return response;
         }
 
@@ -304,14 +334,19 @@ service / on new http:Listener(8080) {
             response: response,
             timestamp: time:utcNow()[0]
         };
+        logEvent("DEBUG", "cache", "Cached response", {
+            requestId: requestId,
+            cacheKey: cacheKey
+        });
 
-        // Update stats...
         return response;
     }
 
     // Helper function to try a specific provider
     private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
+        string requestId = uuid:createType1AsString();
         logEvent("DEBUG", "provider", "Attempting provider request", {
+            requestId: requestId,
             provider: provider,
             prompt: payload.prompt
         });
@@ -342,6 +377,15 @@ service / on new http:Listener(8080) {
         if llmClient is http:Client && handler is function {
             llms:LLMResponse|error response = handler(llmClient, payload);
             if response is llms:LLMResponse {
+                logEvent("INFO", "provider", "Provider request successful", {
+                    requestId: requestId,
+                    provider: provider,
+                    model: response.model,
+                    tokens: {
+                        input: response.input_tokens,
+                        output: response.output_tokens
+                    }
+                });
                 // Update stats for successful request
                 lock {
                     requestStats.totalRequests += 1;
@@ -356,12 +400,18 @@ service / on new http:Listener(8080) {
             return response;
         }
         
+        logEvent("ERROR", "provider", "Provider not configured", {
+            requestId: requestId,
+            provider: provider
+        });
         return error("Provider not configured: " + provider);
     }
 
     private function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
-        // check if openAIConfig is not null
+        string requestId = uuid:createType1AsString();
+        
         if openAIConfig == () {
+            logEvent("ERROR", "openai", "OpenAI not configured", {requestId});
             return error("OpenAI is not configured");
         }
         // Transform to OpenAI format
@@ -383,13 +433,51 @@ service / on new http:Listener(8080) {
 
         if openAIConfig?.apiKey != "" {
             map<string|string[]> headers = { "Authorization": "Bearer " + (openAIConfig?.apiKey ?: "") };
-            http:Response response = check openaiClient->post("/v1/chat/completions", openAIPayload, headers);
+            
+            logEvent("DEBUG", "openai", "Sending request to OpenAI", {
+                requestId,
+                model: openAIConfig?.model ?: "",
+                promptLength: req.prompt.length()
+            });
 
-            json responsePayload = check response.getJsonPayload();
-            llms:OpenAIResponse openAIResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
+            http:Response|error response = openaiClient->post("/v1/chat/completions", openAIPayload, headers);
+            
+            if response is error {
+                logEvent("ERROR", "openai", "HTTP request failed", {
+                    requestId,
+                    'error: response.message() + ":" + response.detail().toString()
+                });
+                return response;
+            }
 
-            // Apply guardrails before returning
-            string guardedText = check applyGuardrails(openAIResponse.choices[0].message.content);
+            json|error responsePayload = response.getJsonPayload();
+            if responsePayload is error {
+                logEvent("ERROR", "openai", "Invalid JSON response", {
+                    requestId,
+                    'error: responsePayload.message() + ":" + responsePayload.detail().toString()
+                });
+                return responsePayload;
+            }
+
+            llms:OpenAIResponse|error openAIResponse = responsePayload.cloneWithType(llms:OpenAIResponse);
+            if openAIResponse is error {
+                logEvent("ERROR", "openai", "Response type conversion failed", {
+                    requestId,
+                    'error: openAIResponse.message() + ":" + openAIResponse.detail().toString()
+                });
+                return openAIResponse;
+            }
+
+            // Apply guardrails
+            string|error guardedText = applyGuardrails(openAIResponse.choices[0].message.content);
+            if guardedText is error {
+                logEvent("ERROR", "guardrails", "Guardrails check failed", {
+                    requestId,
+                    'error: guardedText.message() + ":" + guardedText.detail().toString()
+                });
+                return guardedText;
+            }
+
             return {
                 text: guardedText,
                 input_tokens: openAIResponse.usage.prompt_tokens,
@@ -398,6 +486,7 @@ service / on new http:Listener(8080) {
                 provider: "openai"
             };
         } else {
+            logEvent("ERROR", "openai", "Invalid API key configuration", {requestId});
             return error("OpenAI configuration is invalid");
         }
     }
