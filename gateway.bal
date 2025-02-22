@@ -96,10 +96,19 @@ logging:LoggingConfig loggingConfig = {
 // Add logging state
 boolean isVerboseLogging = gateway.verboseLogging;
 
-// Add logging helper function
-function logEvent(string level, string component, string message, map<any> metadata = {}) {
+function logEvent(string level, string component, string message, map<json> metadata = {}) {
     if (!isVerboseLogging && level == "DEBUG") {
         return;
+    }
+
+    // Create a copy of metadata to avoid modifying the original
+    map<any> sanitizedMetadata = metadata.clone();
+
+    // Mask sensitive data in metadata
+    foreach string key in sanitizedMetadata.keys() {
+        if (key.toLowerAscii().includes("apikey")) {
+            sanitizedMetadata[key] = "********";
+        }
     }
 
     json logEntry = {
@@ -107,7 +116,7 @@ function logEvent(string level, string component, string message, map<any> metad
         level: level,
         component: component,
         message: message,
-        metadata: metadata.toString()
+        metadata: sanitizedMetadata.toString()
     };
 
     // Always log to console
@@ -138,7 +147,7 @@ service / on new http:Listener(8080) {
         
         // Read initial logging configuration
         loggingConfig = defaultLoggingConfig;
-        logEvent("DEBUG", "init", "Loaded logging configuration", loggingConfig);
+        logEvent("DEBUG", "init", "Loaded logging configuration", <map<json>>loggingConfig.toJson());
 
         // Check if at least one provider is configured
         if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
