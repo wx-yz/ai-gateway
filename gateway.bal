@@ -148,15 +148,15 @@ type RateLimitState record {|
 
 // Store rate limit states by IP
 map<RateLimitState> rateLimitStates = {};
-RateLimitPlan? currentPlan = ();
+RateLimitPlan? currentRateLimitPlan = ();
 
 // Add rate limiting function
 function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
-    if currentPlan is () {
+    if currentRateLimitPlan is () {
         return [true, 0, 0, 0];
     }
 
-    RateLimitPlan plan = <RateLimitPlan>currentPlan;
+    RateLimitPlan plan = <RateLimitPlan>currentRateLimitPlan;
     int currentTime = time:utcNow()[0];
     
     lock {
@@ -197,6 +197,8 @@ service / on new http:Listener(8080) {
     private http:Client? ollamaClient = ();
     private http:Client? mistralClient = ();
     private http:Client? cohereClient = ();
+
+
 
     function init() returns error? {
         logEvent("INFO", "init", "Initializing AI Gateway");
@@ -273,7 +275,7 @@ service / on new http:Listener(8080) {
         });
     }
 
-    resource function post chat(@http:Header {name: "x-llm-provider"} string llmProvider, 
+    resource function post v1/chat/completions(@http:Header {name: "x-llm-provider"} string llmProvider, 
                               @http:Payload llms:LLMRequest payload,
                               http:Request request) returns error|http:Response|llms:LLMResponse {
         string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
@@ -305,15 +307,24 @@ service / on new http:Listener(8080) {
             return response;
         }
 
+        [string, string]|error prompts = getPrompts(payload);
+        if prompts is error {
+            response.statusCode = 400; // Bad Request
+            response.setPayload({
+                'error: prompts.message()
+            });
+            return response;
+        }
+
         string requestId = uuid:createType1AsString();
         logEvent("INFO", "chat", "Received chat request", {
             requestId: requestId,
             provider: llmProvider,
-            prompt: payload.prompt
+            prompt: prompts.toString()
         });
 
         // Check cache first
-        string cacheKey = llmProvider + ":" + payload.prompt;
+        string cacheKey = llmProvider + ":" + prompts.toString();
         if (promptCache.hasKey(cacheKey)) {
             logEvent("DEBUG", "cache", "Checking cache entry", {
                 requestId: requestId,
@@ -335,15 +346,17 @@ service / on new http:Listener(8080) {
                     requestStats.cacheHits += 1;
                     requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
                     requestStats.successfulRequests += 1;
-                    tokenStats.totalInputTokens += entry.response.input_tokens;
-                    tokenStats.totalOutputTokens += entry.response.output_tokens;
-                    tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + entry.response.input_tokens;
-                    tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + entry.response.output_tokens;
+                    tokenStats.totalInputTokens += entry.response.usage.prompt_tokens;
+                    tokenStats.totalOutputTokens += entry.response.usage.completion_tokens;
+                    tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + entry.response.usage.prompt_tokens;
+                    tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + entry.response.usage.completion_tokens;
                 }
                 http:Response cachedResponse = new;
-                cachedResponse.setHeader("RateLimit-Limit", rateLimit.toString());
-                cachedResponse.setHeader("RateLimit-Remaining", remaining.toString());
-                cachedResponse.setHeader("RateLimit-Reset", reset.toString());
+                if currentRateLimitPlan != () {
+                    cachedResponse.setHeader("RateLimit-Limit", rateLimit.toString());
+                    cachedResponse.setHeader("RateLimit-Remaining", remaining.toString());
+                    cachedResponse.setHeader("RateLimit-Reset", reset.toString());
+                }
                 cachedResponse.setPayload(entry.response);
                 return cachedResponse;
             } else {
@@ -441,9 +454,11 @@ service / on new http:Listener(8080) {
         });
 
         // Add rate limit headers to response context
-        response.setHeader("RateLimit-Limit", rateLimit.toString());
-        response.setHeader("RateLimit-Remaining", remaining.toString());
-        response.setHeader("RateLimit-Reset", reset.toString());
+        if currentRateLimitPlan != () {
+            response.setHeader("RateLimit-Limit", rateLimit.toString());
+            response.setHeader("RateLimit-Remaining", remaining.toString());
+            response.setHeader("RateLimit-Reset", reset.toString());
+        }
         response.setPayload(llmResponse);
 
         return response;
@@ -455,7 +470,7 @@ service / on new http:Listener(8080) {
         logEvent("DEBUG", "provider", "Attempting provider request", {
             requestId: requestId,
             provider: provider,
-            prompt: payload.prompt
+            prompt: payload.toString()
         });
 
         // Map of provider to client
@@ -489,8 +504,8 @@ service / on new http:Listener(8080) {
                     provider: provider,
                     model: response.model,
                     tokens: {
-                        input: response.input_tokens,
-                        output: response.output_tokens
+                        input: response.usage.prompt_tokens,
+                        output: response.usage.completion_tokens
                     }
                 });
                 // Update stats for successful request
@@ -498,10 +513,10 @@ service / on new http:Listener(8080) {
                     requestStats.totalRequests += 1;
                     requestStats.successfulRequests += 1;
                     requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                    tokenStats.totalInputTokens += response.input_tokens;
-                    tokenStats.totalOutputTokens += response.output_tokens;
-                    tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.input_tokens;
-                    tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.output_tokens;
+                    tokenStats.totalInputTokens += response.usage.prompt_tokens;
+                    tokenStats.totalOutputTokens += response.usage.completion_tokens;
+                    tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.usage.prompt_tokens;
+                    tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.usage.completion_tokens;
                 }
             }
             return response;
@@ -521,17 +536,24 @@ service / on new http:Listener(8080) {
             logEvent("ERROR", "openai", "OpenAI not configured", {requestId});
             return error("OpenAI is not configured");
         }
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
+
         // Transform to OpenAI format
         json openAIPayload = {
             "model": openAIConfig?.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": systemPrompt
+                    "content": reqSystemPrompt + " " + systemPrompt
                 },
                 {
                     "role": "user",
-                    "content": req.prompt
+                    "content": reqUserPrompt
                 }
             ],
             "temperature": req.temperature ?: 0.7,
@@ -544,7 +566,7 @@ service / on new http:Listener(8080) {
             logEvent("DEBUG", "openai", "Sending request to OpenAI", {
                 requestId,
                 model: openAIConfig?.model ?: "",
-                promptLength: req.prompt.length()
+                promptLength: reqUserPrompt.length()
             });
 
             http:Response|error response = openaiClient->post("/v1/chat/completions", openAIPayload, headers);
@@ -586,12 +608,25 @@ service / on new http:Listener(8080) {
             }
 
             return {
-                text: guardedText,
-                input_tokens: openAIResponse.usage.prompt_tokens,
-                output_tokens: openAIResponse.usage.completion_tokens,
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
                 model: openAIResponse.model,
-                provider: "openai"
-            };
+                system_fingerprint: (),
+                choices: [{
+                    index: openAIResponse.choices[0].index,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: openAIResponse.choices[0].finish_reason ?: "stop"
+                }],
+                usage: {
+                    prompt_tokens: openAIResponse.usage.prompt_tokens,
+                    completion_tokens: openAIResponse.usage.completion_tokens,
+                    total_tokens: openAIResponse.usage.total_tokens
+                }
+            };  
         } else {
             logEvent("ERROR", "openai", "Invalid API key configuration", {requestId});
             return error("OpenAI configuration is invalid");
@@ -602,16 +637,23 @@ service / on new http:Listener(8080) {
         if ollamaConfig == () {
             return error("Ollama is not configured");
         }
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
+
         json ollamaPayload = {
             "model": ollamaConfig?.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": systemPrompt
+                    "content": reqSystemPrompt + " " + systemPrompt
                 },
                 {
                     "role": "user",
-                    "content": req.prompt
+                    "content": reqUserPrompt
                 }
             ],
             "stream": false
@@ -628,12 +670,26 @@ service / on new http:Listener(8080) {
 
             // Apply guardrails before returning
             string guardedText = check applyGuardrails(ollamaResponse.message.content);
+
             return {
-                text: guardedText,
-                input_tokens: ollamaResponse.prompt_eval_count,
-                output_tokens: ollamaResponse.eval_count,
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
                 model: ollamaResponse.model,
-                provider: "ollama"
+                system_fingerprint: (),
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: ollamaResponse.done_reason
+                }],
+                usage: {
+                    prompt_tokens: ollamaResponse.prompt_eval_count,
+                    completion_tokens: ollamaResponse.eval_count,
+                    total_tokens: ollamaResponse.prompt_eval_count + ollamaResponse.eval_count
+                }
             };
         } else {
             return error("Ollama configuration is invalid");
@@ -644,16 +700,23 @@ service / on new http:Listener(8080) {
         if anthropicConfig == () {
             return error("Anthropic is not configured");
         }
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
+
         json anthropicPayload = {
             "model": anthropicConfig?.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": systemPrompt
+                    "content": reqSystemPrompt + " " + systemPrompt
                 },
                 {
                     "role": "user",
-                    "content": req.prompt
+                    "content": reqUserPrompt
                 }
             ],
             "max_tokens": req.maxTokens ?: 1000
@@ -673,11 +736,24 @@ service / on new http:Listener(8080) {
             // Apply guardrails before returning
             string guardedText = check applyGuardrails(anthropicResponse.contents.content[0].text);
             return {
-                text: guardedText,
-                input_tokens: anthropicResponse.usage.input_tokens,
-                output_tokens: anthropicResponse.usage.output_tokens,
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
                 model: anthropicResponse.model,
-                provider: "anthropic"
+                system_fingerprint: (),
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: ""
+                }],
+                usage: {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0
+                }
             };
         } else {
             return error("Anthropic configuration is invalid");
@@ -688,16 +764,23 @@ service / on new http:Listener(8080) {
         if geminiConfig == () {
             return error("Gemini is not configured");
         }
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
+
         json geminiPayload = {
             "model": geminiConfig?.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": systemPrompt
+                    "content": reqSystemPrompt + " " + systemPrompt
                 },
                 {
                     "role": "user",
-                    "content": req.prompt
+                    "content": reqUserPrompt
                 }
             ],
             "temperature": req.temperature ?: 0.7,
@@ -711,17 +794,30 @@ service / on new http:Listener(8080) {
 
             json responsePayload = check response.getJsonPayload();
             log:printInfo("Gemini response: " + responsePayload.toString());
-            llms:OpenAIResponse openAIResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
+            llms:OpenAIResponse geminiResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
             // Apply guardrails before returning
-            string guardedText = check applyGuardrails(openAIResponse.choices[0].message.content);
+            string guardedText = check applyGuardrails(geminiResponse.choices[0].message.content);
             return {
-                text: guardedText,
-                input_tokens: 0,
-                output_tokens: 0,
-                model: openAIResponse.model,
-                provider: "gemini"
-            };
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
+                model: geminiResponse.model,
+                system_fingerprint: (),
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: geminiResponse.choices[0].finish_reason ?: ""
+                }],
+                usage: {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0
+                }
+            };  
         } else {
             return error("Gemini configuration is invalid");
         }
@@ -731,16 +827,22 @@ service / on new http:Listener(8080) {
         if mistralConfig == () {
             return error("Mistral is not configured");
         }
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
         json mistralPayload = {
             "model": mistralConfig?.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": systemPrompt
+                    "content": reqSystemPrompt + " " + systemPrompt
                 },
                 {
                     "role": "user", 
-                    "content": req.prompt
+                    "content": reqUserPrompt
                 }
             ],
             "temperature": req.temperature ?: 0.7,
@@ -757,12 +859,26 @@ service / on new http:Listener(8080) {
 
             // Apply guardrails before returning
             string guardedText = check applyGuardrails(mistralResponse.choices[0].message.content);
+
             return {
-                text: guardedText,
-                input_tokens: mistralResponse.usage.prompt_tokens,
-                output_tokens: mistralResponse.usage.completion_tokens,
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
                 model: mistralResponse.model,
-                provider: "mistral"
+                system_fingerprint: (),
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: mistralResponse.choices[0].finish_reason ?: ""
+                }],
+                usage: {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0
+                }
             };
         } else {
             return error("Mistral configuration is invalid");
@@ -773,19 +889,27 @@ service / on new http:Listener(8080) {
         if cohereConfig == () {
             return error("Cohere is not configured");
         }
+
+        [string,string]|error prompts = getPrompts(req);
+        if prompts is error {
+            return error("Invalid request");
+        }
+        string reqSystemPrompt = prompts[0];
+        string reqUserPrompt = prompts[1];
+
         string cohereSystemPromt = "test";
         if (systemPrompt != "") {
-            cohereSystemPromt = systemPrompt;
+            cohereSystemPromt = reqUserPrompt + " " + systemPrompt;
         }
         json coherePayload = {
-            "message": req.prompt,
+            "message": reqUserPrompt,
             "chat_history": [{
                 "role": "USER",
-                "message": req.prompt
+                "message": reqUserPrompt
             },
             {
                 "role": "SYSTEM",
-                "message": cohereSystemPromt
+                "message": cohereSystemPromt + " " + reqSystemPrompt
             }],  
             "temperature": req.temperature ?: 0.7, 
             "max_tokens": req.maxTokens ?: 1000,                     
@@ -807,18 +931,66 @@ service / on new http:Listener(8080) {
             
             // Apply guardrails before returning
             string guardedText = check applyGuardrails(cohereResponse.text);
+
             return {
-                text: guardedText,
-                input_tokens: cohereResponse.meta.tokens.input_tokens,
-                output_tokens: cohereResponse.meta.billed_units.output_tokens,
+                id: uuid:createType1AsString(),
+                'object: "chat.completion",
+                created: time:utcNow()[0],
                 model: cohereConfig?.model ?: "",
-                provider: "cohere"
-            };
+                system_fingerprint: (),
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: "assistant",
+                        content: guardedText
+                    },
+                    finish_reason: "stop"
+                }],
+                usage: {
+                    prompt_tokens: cohereResponse.meta.tokens.input_tokens,
+                    completion_tokens: cohereResponse.meta.tokens.output_tokens,
+                    total_tokens: cohereResponse.meta.tokens.input_tokens + cohereResponse.meta.tokens.output_tokens
+                }
+            }; 
         } else {
             return error("Cohere configuration is invalid");
         }
     }
+
+    // Function that accepts an llms:LLMRequest and returns the system prompt and user prompt
+  
 }
+function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
+        string systemPrompt = "";
+        string userPrompt = "";
+        llms:LLMRequestMessage[] messages = llmRequest.messages;
+        if messages.length() == 1 { // If it's only one here, expecting only user prompt
+            if messages[0].content == "" {
+                return error("User prompt is required");
+            } else {
+                userPrompt = messages[0].content;
+            }
+        } else if messages.length() == 2 { // If it's two here, expecting system and user prompt
+            // find the user prompt
+            foreach llms:LLMRequestMessage message in messages {
+                if message.role == "user" {
+                    if message.content == "" {
+                        return error("User prompt is required");
+                    } else {
+                        userPrompt = message.content;
+                    }
+                }
+                if message.role == "system" {
+                    systemPrompt = message.content;
+                }
+            }
+        } else {
+            // What is this?!
+            return error("Invalid request");
+        }
+        
+        return [systemPrompt, userPrompt];
+    }
 
 // Analytics storage
 analytics:RequestStats requestStats = {
@@ -974,13 +1146,13 @@ service /admin on new http:Listener(8081) {
 
     // Get current rate limit plan
     resource function get ratelimit() returns RateLimitPlan? {
-        return currentPlan;
+        return currentRateLimitPlan;
     }
 
     // Update rate limit plan
     resource function post ratelimit(@http:Payload RateLimitPlan payload) returns string|error {
         lock {
-            currentPlan = payload;
+            currentRateLimitPlan = payload;
             // Clear existing states when plan changes
             rateLimitStates = {};
         }
@@ -995,7 +1167,7 @@ service /admin on new http:Listener(8081) {
     // Remove rate limiting
     resource function delete ratelimit() returns string {
         lock {
-            currentPlan = ();
+            currentRateLimitPlan = ();
             rateLimitStates = {};
         }
         
