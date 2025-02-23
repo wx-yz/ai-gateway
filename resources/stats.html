@@ -1,234 +1,785 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-bs-theme="dark">
 <head>
-    <title>AI Gateway Stats</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Gateway Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet"
-          href="https://fonts.googleapis.com/css?family=Roboto">
     <style>
-        body { 
-            font-family: 'Roboto', system-ui, sans-serif; 
-            margin: 20px;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #fff;
+        :root {
+            /* Professional color palette for providers */
+            --openai-color: #10a37f;
+            --anthropic-color: #5436da;
+            --gemini-color: #1a73e8;
+            --ollama-color: #ff6b6b;
+            --mistral-color: #7c3aed;
+            --cohere-color: #f9d949;
+            
+            /* Dark theme colors */
+            --bg-primary: #1a1d21;
+            --bg-secondary: #2b2f36;
+            --text-primary: #ffffff;
+            --text-secondary: #a1a5b7;
+            --border-color: #32363f;
+            --chart-grid: #32363f;
         }
-        h1 {
-            text-align: center;
-            font-size: 2.5em;
-            margin-bottom: 30px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
         }
-        .stats-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 30px;
-            max-width: 1200px;
-            margin: 0 auto;
+
+        .navbar {
+            background-color: var(--bg-secondary) !important;
+            border-bottom: 1px solid var(--border-color);
         }
-        .stats-card {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 25px;
-            border-radius: 15px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        }
-        .stats-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 40px rgba(0,0,0,0.2);
-        }
-        h2 {
-            color: #00b4d8;
+
+        .card {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
-            border-bottom: 2px solid rgba(0, 180, 216, 0.3);
-            padding-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
         }
-        .stats-card i {
-            font-size: 1.4em;
-            width: 30px;
+
+        .stat-card {
+            transition: transform 0.2s;
+            height: 100%;
         }
-        p {
-            font-size: 1.1em;
-            margin: 12px 0;
-            padding: 8px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 6px;
+
+        .stat-card:hover {
+            transform: translateY(-5px);
         }
-        canvas {
-            margin-top: 20px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 10px;
-            padding: 15px;
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+            background-color: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid var(--border-color);
         }
-        ul {
-            list-style-type: none;
-            padding: 0;
+
+        .nav-pills .nav-link {
+            color: var(--text-secondary);
+            padding: 0.75rem 1.25rem;
+            transition: all 0.3s ease;
         }
-        li {
-            padding: 8px;
-            margin: 5px 0;
-            background: rgba(255, 99, 132, 0.1);
-            border-radius: 4px;
-            transition: background 0.3s ease;
+
+        .nav-pills .nav-link:hover {
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.1);
         }
-        li:hover {
-            background: rgba(255, 99, 132, 0.2);
+
+        .nav-pills .nav-link.active {
+            background-color: var(--openai-color);
+            color: white;
+        }
+
+        .list-group-item {
+            background-color: var(--bg-secondary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        /* Provider-specific colors for text */
+        .provider-openai { color: var(--openai-color); }
+        .provider-anthropic { color: var(--anthropic-color); }
+        .provider-gemini { color: var(--gemini-color); }
+        .provider-ollama { color: var(--ollama-color); }
+        .provider-mistral { color: var(--mistral-color); }
+        .provider-cohere { color: var(--cohere-color); }
+
+        /* Form styling */
+        .form-control {
+            background-color: var(--bg-primary);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .form-control:focus {
+            background-color: var(--bg-primary);
+            border-color: var(--openai-color);
+            color: var(--text-primary);
+            box-shadow: 0 0 0 0.25rem rgba(16, 163, 127, 0.25);
+        }
+
+        /* Button styling */
+        .btn-primary {
+            background-color: var(--openai-color);
+            border-color: var(--openai-color);
+        }
+
+        .btn-primary:hover {
+            background-color: #0d8a6c;
+            border-color: #0d8a6c;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+            border-color: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background-color: #bb2d3b;
+            border-color: #bb2d3b;
+        }
+
+        /* Card title styling */
+        .card-title {
+            color: var(--text-primary);
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+        }
+
+        /* Stats number styling */
+        .stat-number {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 0;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
         }
     </style>
 </head>
 <body>
-    <h1><i class="fas fa-rocket"></i> AI Gateway Statistics</h1>
-    
-    <div class="stats-container">
-        <!-- Request Statistics Card -->
-        <div class="stats-card">
-            <h2><i class="fas fa-chart-bar"></i>Request Statistics</h2>
-            <p><i class="fas fa-project-diagram"></i> Total Requests: {{totalRequests}}</p>
-            <p><i class="fas fa-check-circle"></i> Successful Requests: {{successfulRequests}}</p>
-            <p><i class="fas fa-times-circle"></i> Failed Requests: {{failedRequests}}</p>
-            <canvas id="requestsChart"></canvas>
-        </div>
-        
-        <!-- Token Usage Card -->
-        <div class="stats-card">
-            <h2><i class="fas fa-coins"></i>Token Usage</h2>
-            <p><i class="fas fa-sign-in-alt"></i> Total Input Tokens: {{totalInputTokens}}</p>
-            <p><i class="fas fa-sign-out-alt"></i> Total Output Tokens: {{totalOutputTokens}}</p>
-            <canvas id="tokensChart"></canvas>
-        </div>
-        
-        <!-- Error Statistics Card -->
-        <div class="stats-card">
-            <h2><i class="fas fa-exclamation-triangle"></i>Error Statistics</h2>
-            <p><i class="fas fa-bug"></i> Total Errors: {{totalErrors}}</p>
-            <h3><i class="fas fa-clock"></i> Recent Errors:</h3>
-            <ul>{{recentErrors}}</ul>
-            <canvas id="errorsChart"></canvas>
-        </div>
 
-        <!-- Cache Stats Card -->
-        <div class="stats-card">
-            <h2><i class="fas fa-database"></i>Cache Statistics</h2>
-            <ul>
-                <li><i class="fas fa-check-circle"></i> Cache Hits: {{cacheHits}}</li>
-                <li><i class="fas fa-times-circle"></i> Cache Misses: {{cacheMisses}}</li>
-                <li><i class="fas fa-percentage"></i> Cache Hit Rate: {{cacheHitRate}}</li>
-            </ul>
+
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#"><i class="bi bi-robot"></i> AI Gateway Admin</a>
+        </div>
+        <div>
+</div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <ul class="nav nav-pills flex-column" id="dashboardTabs" role="tablist">
+                            <li class="nav-item">
+                                <a class="nav-link active" data-bs-toggle="pill" href="#overview">Overview</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" data-bs-toggle="pill" href="#settings">Settings</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" data-bs-toggle="pill" href="#logging">Logging</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" data-bs-toggle="pill" href="#ratelimit">Rate Limiting</a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-9">
+                <div class="tab-content">
+                    <!-- Overview Tab -->
+                    <div class="tab-pane fade show active" id="overview">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card stat-card bg-primary text-white">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Total Requests</h6>
+                                        <h2 class="card-text" id="totalRequests">0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card stat-card bg-success text-white">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Success Rate</h6>
+                                        <h2 class="card-text" id="successRate">0/0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card stat-card bg-info text-white">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Cache Hit Rate</h6>
+                                        <h2 class="card-text" id="cacheHitRate">0%</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card stat-card bg-warning text-white">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Total Errors</h6>
+                                        <h2 class="card-text" id="totalErrors">0</h2>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Requests by Provider</h5>
+                                        <div class="chart-container">
+                                            <canvas id="requestsChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Token Usage by Provider</h5>
+                                        <div class="chart-container">
+                                            <canvas id="tokensChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mt-4">
+                            <div class="col-md-12">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Recent Errors</h5>
+                                        <ul class="list-group" id="recentErrors">
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Tab -->
+                    <div class="tab-pane fade" id="settings">
+                        <div class="card settings-card">
+                            <div class="card-body">
+                                <h5 class="card-title">System Prompt</h5>
+                                <div class="mb-3">
+                                    <textarea class="form-control" id="systemPrompt" rows="3"></textarea>
+                                </div>
+                                <button class="btn btn-primary" onclick="updateSystemPrompt()">Update</button>
+                            </div>
+                        </div>
+
+                        <div class="card settings-card">
+                            <div class="card-body">
+                                <h5 class="card-title">Guardrails</h5>
+                                <div class="mb-3">
+                                    <label class="form-label">Banned Phrases (comma-separated)</label>
+                                    <input type="text" class="form-control" id="bannedPhrases">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Min Length</label>
+                                    <input type="number" class="form-control" id="minLength">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Max Length</label>
+                                    <input type="number" class="form-control" id="maxLength">
+                                </div>
+                                <div class="mb-3 form-check">
+                                    <input type="checkbox" class="form-check-input" id="requireDisclaimer">
+                                    <label class="form-check-label">Require Disclaimer</label>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Disclaimer Text</label>
+                                    <textarea class="form-control" id="disclaimer" rows="2"></textarea>
+                                </div>
+                                <button class="btn btn-primary" onclick="updateGuardrails()">Update</button>
+                            </div>
+                        </div>
+
+                        <div class="card settings-card">
+                            <div class="card-body">
+                                <h5 class="card-title">Cache Management</h5>
+                                <p>Current Cache Size: <span id="cacheSize">0</span> entries</p>
+                                <button class="btn btn-danger" onclick="clearCache()">Clear Cache</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Logging Tab -->
+                    <div class="tab-pane fade" id="logging">
+                        <div class="card settings-card">
+                            <div class="card-body">                                
+                                <h5 class="card-title">Elastic Search Configuration</h5>
+                                <div class="mb-3 form-check form-switch">
+                                    <input type="checkbox" class="form-check-input" id="enableElasticSearch">
+                                    <label class="form-check-label">Enable Elastic Search</label>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Elastic Search Endpoint</label>
+                                    <input type="text" class="form-control" id="elasticSearchEndpoint">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Elastic Search API Key</label>
+                                    <input type="text" class="form-control" id="elasticApiKey">
+                                </div>       
+                            </div>
+                            <hr />
+                            <div class="card-body">
+                                <h5 class="card-title">Splunk Configuration</h5>
+                                <div class="mb-3 form-check form-switch">
+                                    <input type="checkbox" class="form-check-input" id="enableSplunk">
+                                    <label class="form-check-label">Enable Splunk</label>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Splunk Endpoint</label>
+                                    <input type="text" class="form-control" id="splunkEndpoint">
+                                </div>
+                            </div>
+                            <hr />
+                            <div class="card-body">
+                                <h5 class="card-title">Datadog Configuration</h5>                          
+                                <div class="mb-3 form-check form-switch">
+                                    <input type="checkbox" class="form-check-input" id="enableDatadog">
+                                    <label class="form-check-label">Enable Datadog</label>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Datadog Endpoint</label>
+                                    <input type="text" class="form-control" id="datadogEndpoint">
+                                </div>  
+                                <button class="btn btn-primary" onclick="updateLogging()">Update</button>                              
+                            </div>
+                            
+                        </div>
+                    </div>
+
+                    <!-- Rate Limiting Tab -->
+                    <div class="tab-pane fade" id="ratelimit">
+                        <div class="card settings-card">
+                            <div class="card-body">
+                                <h5 class="card-title">Rate Limiting Configuration</h5>
+                                <div class="mb-3">
+                                    <label class="form-label">Plan Name</label>
+                                    <input type="text" class="form-control" id="planName">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Requests Per Window</label>
+                                    <input type="number" class="form-control" id="requestsPerWindow">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Window Seconds</label>
+                                    <input type="number" class="form-control" id="windowSeconds">
+                                </div>
+                                <button class="btn btn-primary" onclick="updateRateLimit()">Update</button>
+                                <button class="btn btn-danger" onclick="disableRateLimit()">Disable Rate Limiting</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Rest of the script section remains unchanged -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Gradient color generator
-        const createGradient = (ctx, color1, color2) => {
-            const gradient = ctx.createLinearGradient(0, 0, 400, 0);
-            gradient.addColorStop(0, color1);
-            gradient.addColorStop(1, color2);
-            return gradient;
-        };
+        // Theme handling
+        function toggleTheme() {
+            const html = document.documentElement;
+            const themeIcon = document.getElementById('themeIcon');
+            const currentTheme = html.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            html.setAttribute('data-bs-theme', newTheme);
+            themeIcon.className = newTheme === 'dark' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
+            
+            // Update charts with new theme
+            updateChartsTheme();
+        }
 
-        // Requests Chart (Doughnut)
-        const requestsCtx = document.getElementById('requestsChart').getContext('2d');
-        new Chart(requestsCtx, {
-            type: 'doughnut',
-            data: {
-                labels: {{requestsLabels}},
-                datasets: [{
-                    data: {{requestsData}},
-                    backgroundColor: [
-                        createGradient(requestsCtx, '#ff6b6b', '#ff9f43'),
-                        createGradient(requestsCtx, '#4ecdc4', '#45b7d1'),
-                        createGradient(requestsCtx, '#96f2d7', '#35d0ba')
-                    ],
-                    borderWidth: 2,
-                    borderColor: 'rgba(255, 255, 255, 0.1)',
-                    hoverOffset: 20
-                }]
-            },
-            options: {
+        function getProviderColors() {
+            return {
+                openai: '#10a37f',
+                anthropic: '#5436da',
+                gemini: '#1a73e8',
+                ollama: '#ff6b6b',
+                mistral: '#7c3aed',
+                cohere: '#f9d949'
+            };
+        }
+
+        function getChartColors(labels) {
+            const providerColors = getProviderColors();
+            return labels.map(label => {
+                // Convert label to lowercase to match provider keys
+                const provider = label.toLowerCase();
+                // Return the matching color or a default color if not found
+                return providerColors[provider] || '#808080';
+            });
+        }
+
+        function getChartOptions() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: {
-                        position: 'right',
-                        labels: { color: '#fff' }
-                    }
-                }
-            }
-        });
-
-        // Tokens Chart (Bar with Gradient)
-        const tokensCtx = document.getElementById('tokensChart').getContext('2d');
-        new Chart(tokensCtx, {
-            type: 'bar',
-            data: {
-                labels: {{tokensLabels}},
-                datasets: [{
-                    label: 'Input Tokens',
-                    data: {{inputTokensData}},
-                    backgroundColor: createGradient(tokensCtx, '#36A2EB', '#4BC0C0'),
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: 'rgba(255, 255, 255, 0.2)'
-                }, {
-                    label: 'Output Tokens',
-                    data: {{outputTokensData}},
-                    backgroundColor: createGradient(tokensCtx, '#FF6384', '#FF9F40'),
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: 'rgba(255, 255, 255, 0.2)'
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    x: { grid: { color: 'rgba(255, 255, 255, 0.05)' } },
-                    y: { 
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        beginAtZero: true
+                        labels: {
+                            color: '#ffffff',
+                            font: {
+                                size: 13,
+                                weight: '500'
+                            }
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleFont: {
+                            size: 14,
+                            weight: '600'
+                        },
+                        bodyFont: {
+                            size: 13
+                        },
+                        padding: 12,
+                        cornerRadius: 4,
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = context.parsed.y;
+                                return `${label}: ${value.toLocaleString()}`;
+                            }
+                        }
                     }
                 },
-                plugins: {
-                    legend: { labels: { color: '#fff' } }
-                }
-            }
-        });
-
-        // Errors Chart (Line with Animation)
-        const errorsCtx = document.getElementById('errorsChart').getContext('2d');
-        new Chart(errorsCtx, {
-            type: 'line',
-            data: {
-                labels: {{errorLabels}},
-                datasets: [{
-                    label: 'Errors by Type',
-                    data: {{errorData}},
-                    borderColor: '#FF6384',
-                    backgroundColor: createGradient(errorsCtx, '#FF638455', '#FF9F4044'),
-                    borderWidth: 2,
-                    pointRadius: 5,
-                    pointBackgroundColor: '#fff',
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
                 scales: {
-                    x: { grid: { color: 'rgba(255, 255, 255, 0.05)' } },
-                    y: { 
-                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                        beginAtZero: true
+                    x: {
+                        grid: {
+                            color: 'var(--chart-grid)',
+                            drawBorder: false
+                        },
+                        ticks: {
+                            color: '#a1a5b7',
+                            font: {
+                                size: 12
+                            }
+                        }
+                    },
+                    y: {
+                        grid: {
+                            color: 'var(--chart-grid)',
+                            drawBorder: false
+                        },
+                        ticks: {
+                            color: '#a1a5b7',
+                            font: {
+                                size: 12
+                            },
+                            callback: function(value) {
+                                return value.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            };
+        }
+
+        function updateChartsTheme() {
+            const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+            const textColor = isDark ? '#fff' : '#000';
+
+            const chartOptions = {
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: textColor
+                        }
                     }
                 },
-                plugins: {
-                    legend: { labels: { color: '#fff' } }
+                scales: {
+                    x: {
+                        ticks: { color: textColor },
+                        grid: { color: isDark ? '#444' : '#ddd' }
+                    },
+                    y: {
+                        ticks: { color: textColor },
+                        grid: { color: isDark ? '#444' : '#ddd' }
+                    }
                 }
-            }
+            };
+
+            requestsChart.options = {...requestsChart.options, ...chartOptions};
+            tokensChart.options = {...tokensChart.options, ...chartOptions};
+            
+            requestsChart.update();
+            tokensChart.update();
+        }
+
+        // Add function to load stats
+        async function loadStats() {
+            const response = await fetch('/admin/stats');
+            const stats = await response.json();
+            
+            // Update overview cards
+            document.getElementById('totalRequests').textContent = stats.overview.totalRequests.toLocaleString();
+            document.getElementById('successRate').textContent = 
+                `${stats.overview.successfulRequests.toLocaleString()}/${stats.overview.totalRequests.toLocaleString()}`;
+            document.getElementById('cacheHitRate').textContent = 
+                `${stats.overview.cacheHitRate.toFixed(2)}%`;
+            document.getElementById('totalErrors').textContent = stats.overview.totalErrors.toLocaleString();
+
+            // Update charts with colors
+            const providerColors = getChartColors(stats.requests.labels);
+            
+            // Update requests chart
+            requestsChart.data.labels = stats.requests.labels;
+            requestsChart.data.datasets[0].data = stats.requests.data;
+            requestsChart.data.datasets[0].backgroundColor = providerColors.map(color => `${color}80`);
+            requestsChart.data.datasets[0].borderColor = providerColors;
+            requestsChart.update();
+
+            // Update tokens chart
+            tokensChart.data.labels = stats.tokens.labels;
+            tokensChart.data.datasets[0].data = stats.tokens.inputData;
+            tokensChart.data.datasets[1].data = stats.tokens.outputData;
+            tokensChart.data.datasets[0].backgroundColor = providerColors.map(color => `${color}60`);
+            tokensChart.data.datasets[0].borderColor = providerColors;
+            tokensChart.data.datasets[1].backgroundColor = providerColors.map(color => `${color}90`);
+            tokensChart.data.datasets[1].borderColor = providerColors;
+            tokensChart.update();
+
+            // Update recent errors with styled provider names
+            const errorsList = document.getElementById('recentErrors');
+            errorsList.innerHTML = stats.errors.recent
+                .map(error => {
+                    const errorText = error.toString();
+                    // Add provider-specific styling if provider name is found in error
+                    Object.keys(getProviderColors()).forEach(provider => {
+                        if (errorText.toLowerCase().includes(provider)) {
+                            error = errorText.replace(
+                                new RegExp(provider, 'i'),
+                                `<span class="provider-${provider.toLowerCase()}">${provider}</span>`
+                            );
+                        }
+                    });
+                    return `<li class="list-group-item">${error}</li>`;
+                })
+                .join('');
+
+            // Update cache size
+            document.getElementById('cacheSize').textContent = stats.cache.size.toLocaleString();
+        }
+
+        // Initialize charts
+        let requestsChart, tokensChart;
+
+        async function initializeCharts() {
+            const requestsCtx = document.getElementById('requestsChart').getContext('2d');
+            const tokensCtx = document.getElementById('tokensChart').getContext('2d');
+
+            const isDark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+            const textColor = isDark ? '#fff' : '#000';
+
+            const commonOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: textColor,
+                            font: {
+                                size: 14
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: textColor },
+                        grid: { color: isDark ? '#444' : '#ddd' }
+                    },
+                    y: {
+                        ticks: { color: textColor },
+                        grid: { color: isDark ? '#444' : '#ddd' }
+                    }
+                }
+            };
+
+            requestsChart = new Chart(requestsCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Requests',
+                        data: [],
+                        backgroundColor: [],
+                        borderColor: [],
+                        borderWidth: 2
+                    }]
+                },
+                options: commonOptions
+            });
+
+            tokensChart = new Chart(tokensCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Input Tokens',
+                            data: [],
+                            backgroundColor: [],
+                            borderColor: [],
+                            borderWidth: 2
+                        },
+                        {
+                            label: 'Output Tokens',
+                            data: [],
+                            backgroundColor: [],
+                            borderColor: [],
+                            borderWidth: 2
+                        }
+                    ]
+                },
+                options: {
+                    ...commonOptions,
+                    plugins: {
+                        ...commonOptions.plugins,
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.dataset.label || '';
+                                    const value = context.parsed.y;
+                                    return `${label}: ${value.toLocaleString()}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Update stats periodically
+        function startStatsRefresh() {
+            loadStats(); // Initial load
+            setInterval(loadStats, 5000); // Refresh every 5 seconds
+        }
+
+        // Initialize everything when page loads
+        window.addEventListener('load', async () => {
+            await initializeCharts();
+            await loadInitialValues();
+            startStatsRefresh();
         });
+
+        // Load initial values
+        async function loadInitialValues() {
+            // Load system prompt
+            const systemPromptResponse = await fetch('/admin/systemprompt');
+            const systemPromptData = await systemPromptResponse.json();
+            document.getElementById('systemPrompt').value = systemPromptData.prompt;
+
+            // Load guardrails
+            const guardrailsResponse = await fetch('/admin/guardrails');
+            const guardrailsData = await guardrailsResponse.json();
+            document.getElementById('bannedPhrases').value = guardrailsData.bannedPhrases.join(',');
+            document.getElementById('minLength').value = guardrailsData.minLength;
+            document.getElementById('maxLength').value = guardrailsData.maxLength;
+            document.getElementById('requireDisclaimer').checked = guardrailsData.requireDisclaimer;
+            document.getElementById('disclaimer').value = guardrailsData.disclaimer || '';
+
+            // Load logging config
+            const loggingResponse = await fetch('/admin/logging');
+            const loggingData = await loggingResponse.json();
+            document.getElementById('enableSplunk').checked = loggingData.enableSplunk;
+            document.getElementById('splunkEndpoint').value = loggingData.splunkEndpoint;
+            document.getElementById('enableElasticSearch').checked = loggingData.enableElasticSearch;
+            document.getElementById('elasticSearchEndpoint').value = loggingData.elasticSearchEndpoint;
+            document.getElementById('elasticApiKey').value = loggingData.elasticApiKey;
+            document.getElementById('enableDatadog').checked = loggingData.enableDatadog;
+            document.getElementById('datadogEndpoint').value = loggingData.datadogEndpoint;
+
+            // Load rate limit config
+            const rateLimitResponse = await fetch('/admin/ratelimit');
+            const rateLimitData = await rateLimitResponse.json();
+            if (rateLimitData) {
+                document.getElementById('planName').value = rateLimitData.name;
+                document.getElementById('requestsPerWindow').value = rateLimitData.requestsPerWindow;
+                document.getElementById('windowSeconds').value = rateLimitData.windowSeconds;
+            }
+        }
+
+        // Update functions
+        async function updateSystemPrompt() {
+            const prompt = document.getElementById('systemPrompt').value;
+            await fetch('/admin/systemprompt', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({prompt})
+            });
+            showToast('System prompt updated');
+        }
+
+        async function updateGuardrails() {
+            const config = {
+                bannedPhrases: document.getElementById('bannedPhrases').value.split(',').map(p => p.trim()),
+                minLength: parseInt(document.getElementById('minLength').value),
+                maxLength: parseInt(document.getElementById('maxLength').value),
+                requireDisclaimer: document.getElementById('requireDisclaimer').checked,
+                disclaimer: document.getElementById('disclaimer').value
+            };
+            await fetch('/admin/guardrails', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            });
+            showToast('Guardrails updated');
+        }
+
+        async function clearCache() {
+            await fetch('/admin/cache', {method: 'DELETE'});
+            showToast('Cache cleared');
+        }
+
+        async function updateLogging() {
+            const config = {
+                enableSplunk: document.getElementById('enableSplunk').checked,
+                enableDatadog: document.getElementById('enableDatadog').checked,
+                enableElasticSearch: document.getElementById('enableElasticSearch').checked,
+                elasticSearchEndpoint: document.getElementById('elasticSearchEndpoint').value,                
+                splunkEndpoint: document.getElementById('splunkEndpoint').value,
+                elasticApiKey: document.getElementById('elasticApiKey').value,
+                datadogEndpoint: document.getElementById('datadogEndpoint').value
+            };
+            await fetch('/admin/logging', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            });
+            showToast('Logging configuration updated');
+        }
+
+        async function updateRateLimit() {
+            const config = {
+                name: document.getElementById('planName').value,
+                requestsPerWindow: parseInt(document.getElementById('requestsPerWindow').value),
+                windowSeconds: parseInt(document.getElementById('windowSeconds').value)
+            };
+            await fetch('/admin/ratelimit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            });
+            showToast('Rate limit configuration updated');
+        }
+
+        async function disableRateLimit() {
+            await fetch('/admin/ratelimit', {method: 'DELETE'});
+            showToast('Rate limiting disabled');
+        }
+
+        function showToast(message) {
+            // You can implement a toast notification here
+            alert(message);
+        }
     </script>
 </body>
 </html>

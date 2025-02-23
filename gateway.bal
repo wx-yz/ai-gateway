@@ -955,10 +955,7 @@ service / on new http:Listener(8080) {
         } else {
             return error("Cohere configuration is invalid");
         }
-    }
-
-    // Function that accepts an llms:LLMRequest and returns the system prompt and user prompt
-  
+    }  
 }
 function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
         string systemPrompt = "";
@@ -1055,74 +1052,13 @@ service /admin on new http:Listener(8081) {
         return promptCache;
     }
 
-    resource function get stats() returns http:Response|error {
-        string[] requestLabels = [];
-        int[] requestData = [];
-        int i = 0;
-        foreach string ikey in requestStats.requestsByProvider.keys() {
-            requestLabels[i] = ikey;
-            requestData[i] = requestStats.requestsByProvider[ikey] ?: 0;
-            i = i + 1;
-        }
-        string[] inputTokenLabels = [];
-        int[] inputTokenData = [];
-        i = 0;
-        foreach string ikey in tokenStats.inputTokensByProvider.keys() {
-            inputTokenLabels[i] = ikey;
-            inputTokenData[i] = tokenStats.inputTokensByProvider[ikey] ?: 0;
-            i = i + 1;
-        }
-        int[] outputTokenData = [];
-        i = 0;
-        foreach string ikey in tokenStats.outputTokensByProvider.keys() {
-            outputTokenData[i] = tokenStats.outputTokensByProvider[ikey] ?: 0;
-            i = i + 1;
-        }
-        string[] errorLabels = [];
-        int[] errorData = [];
-        i = 0;
-        foreach string ikey in errorStats.errorsByType.keys() {
-            errorLabels[i] = ikey;
-            errorData[i] = errorStats.errorsByType[ikey] ?: 0;
-            i = i + 1;
-        }
-
-        // Calculate cache hit rate
-        float cacheHitRate = 0.0;
-        if (requestStats.totalRequests > 0) {
-            cacheHitRate = <float>requestStats.cacheHits / <float>requestStats.totalRequests * 100.0;
-        }
-
-        // Prepare data for template
-        map<string> templateValues = {
-            "totalRequests": requestStats.totalRequests.toString(),
-            "successfulRequests": requestStats.successfulRequests.toString(),
-            "failedRequests": requestStats.failedRequests.toString(),
-            "cacheHits": requestStats.cacheHits.toString(),
-            "cacheMisses": requestStats.cacheMisses.toString(),
-            "cacheHitRate": cacheHitRate.toFixedString(2) + "%",
-            "totalInputTokens": tokenStats.totalInputTokens.toString(),
-            "totalOutputTokens": tokenStats.totalOutputTokens.toString(),
-            "totalErrors": errorStats.totalErrors.toString(),
-            "recentErrors": "<li>" + string:'join("</li><li>", ...errorStats.recentErrors) + "</li>",
-            "requestsLabels": requestLabels.toString(),
-            "requestsData": requestData.toString(),
-            "tokensLabels": inputTokenLabels.toString(),
-            "inputTokensData": inputTokenData.toString(),
-            "outputTokensData": outputTokenData.toString(),
-            "errorLabels": errorLabels.toString(),
-            "errorData": errorData.toString(),
-            "cacheSize": promptCache.length().toString()
-        };
-
-        string html = analytics:renderTemplate(self.statsTemplate, templateValues);
-
+    resource function get dashboard() returns http:Response|error {
+        string html = analytics:renderTemplate(self.statsTemplate, {});
         http:Response response = new;
         response.setHeader("Content-Type", "text/html");
         response.setPayload(html);
         return response;
     }
-
     // Add logging configuration endpoint
     resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns string|error {
         loggingConfig = <logging:LoggingConfig & readonly>logConfig;
@@ -1134,18 +1070,21 @@ service /admin on new http:Listener(8081) {
     }
 
     // Add verbose logging toggle
-    resource function post verbose(@http:Payload boolean enabled) returns string {
-        isVerboseLogging = enabled;
-        logEvent("INFO", "admin", "Verbose logging " + (enabled ? "enabled" : "disabled"));
-        return "Verbose logging " + (enabled ? "enabled" : "disabled");
-    }
+    // resource function post verbose(@http:Payload boolean enabled) returns string {
+    //     isVerboseLogging = enabled;
+    //     logEvent("INFO", "admin", "Verbose logging " + (enabled ? "enabled" : "disabled"));
+    //     return "Verbose logging " + (enabled ? "enabled" : "disabled");
+    // }
 
-    resource function get verbose() returns boolean {
-        return isVerboseLogging;
-    }
+    // resource function get verbose() returns boolean {
+    //     return isVerboseLogging;
+    // }
 
     // Get current rate limit plan
-    resource function get ratelimit() returns RateLimitPlan? {
+    resource function get ratelimit() returns json? {
+        if currentRateLimitPlan == () {
+            return {};
+        }
         return currentRateLimitPlan;
     }
 
@@ -1179,5 +1118,67 @@ service /admin on new http:Listener(8081) {
     // Get current rate limit states (for debugging)
     resource function get ratelimit/states() returns map<RateLimitState> {
         return rateLimitStates;
+    }
+
+    // Add new JSON stats endpoint
+    resource function get stats() returns json {
+        string[] requestLabels = [];
+        int[] requestData = [];
+        int i = 0;
+        foreach string ikey in requestStats.requestsByProvider.keys() {
+            requestLabels[i] = ikey;
+            requestData[i] = requestStats.requestsByProvider[ikey] ?: 0;
+            i = i + 1;
+        }
+        string[] inputTokenLabels = [];
+        int[] inputTokenData = [];
+        i = 0;
+        foreach string ikey in tokenStats.inputTokensByProvider.keys() {
+            inputTokenLabels[i] = ikey;
+            inputTokenData[i] = tokenStats.inputTokensByProvider[ikey] ?: 0;
+            i = i + 1;
+        }
+        int[] outputTokenData = [];
+        i = 0;
+        foreach string ikey in tokenStats.outputTokensByProvider.keys() {
+            outputTokenData[i] = tokenStats.outputTokensByProvider[ikey] ?: 0;
+            i = i + 1;
+        }        
+
+        // Calculate cache hit rate
+        float cacheHitRate = 0.0;
+        if (requestStats.totalRequests > 0) {
+            cacheHitRate = <float>requestStats.cacheHits / <float>requestStats.totalRequests * 100.0;
+        }
+
+        return {
+            overview: {
+                totalRequests: requestStats.totalRequests,
+                successfulRequests: requestStats.successfulRequests,
+                failedRequests: requestStats.failedRequests,
+                cacheHitRate: cacheHitRate,
+                totalErrors: errorStats.totalErrors
+            },
+            requests: {
+                labels: requestLabels,
+                data: requestData
+            },
+            tokens: {
+                labels: inputTokenLabels,
+                inputData: inputTokenData,
+                outputData: outputTokenData,
+                totalInput: tokenStats.totalInputTokens,
+                totalOutput: tokenStats.totalOutputTokens
+            },
+            errors: {
+                recent: errorStats.recentErrors,
+                byType: errorStats.errorsByType
+            },
+            cache: {
+                hits: requestStats.cacheHits,
+                misses: requestStats.cacheMisses,
+                size: promptCache.length()
+            }
+        };
     }
 }
