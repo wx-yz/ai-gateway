@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package ai_gateway;
+
+service AIGateway {
+    rpc ChatCompletion (ChatCompletionRequest) returns (ChatCompletionResponse);
+}
+
+message ChatCompletionRequest {
+    string llm_provider = 1;
+    repeated Message messages = 2;
+    float temperature = 3;
+    int32 max_tokens = 4;
+}
+
+message Message {
+    string role = 1;
+    string content = 2;
+}
+
+message ChatCompletionResponse {
+    string id = 1;
+    string object = 2;
+    int64 created = 3;
+    string model = 4;
+    repeated Choice choices = 5;
+    Usage usage = 6;
+}
+
+message Choice {
+    int32 index = 1;
+    Message message = 2;
+    string finish_reason = 3;
+}
+
+message Usage {
+    int32 prompt_tokens = 1;
+    int32 completion_tokens = 2;
+    int32 total_tokens = 3;
+} 
