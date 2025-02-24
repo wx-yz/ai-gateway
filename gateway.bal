@@ -815,8 +815,8 @@ function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) retu
 }
 
 function checkCache(string llmProvider, string cacheKey, [string,string] prompts, string requestId, int rateLimit, int remaining, int reset) returns http:Response|() {
+
     // Check cache first
-    //string cacheKey = llmProvider + ":" + prompts.toString();
     if (promptCache.hasKey(cacheKey)) {
         logEvent("DEBUG", "cache", "Checking cache entry", {
             requestId: requestId,
@@ -946,9 +946,11 @@ service / on new http:Listener(8080) {
         });
     }
 
-    resource function post v1/chat/completions(@http:Header {name: "x-llm-provider"} string llmProvider, 
-                              @http:Payload llms:LLMRequest payload,
-                              http:Request request) returns error|http:Response|llms:LLMResponse {
+    resource function post v1/chat/completions(
+            @http:Header {name: "x-llm-provider"} string llmProvider, 
+            @http:Header {name: "Cache-Control"} string? cacheControl,
+            @http:Payload llms:LLMRequest payload,
+            http:Request request) returns error|http:Response|llms:LLMResponse {
         string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
 
         // TODO: Use the client IP address from the request
@@ -996,10 +998,14 @@ service / on new http:Listener(8080) {
 
         // check cache first
         string cacheKey = llmProvider + ":" + prompts.toString();
-        http:Response|() cachedResponse = checkCache(llmProvider, cacheKey, prompts, requestId, rateLimit, remaining, reset);
-        if cachedResponse is http:Response {
-            return cachedResponse;
+        // Skip cache if there's Cache-Control: no-cache header
+        if cacheControl == "" || cacheControl != "no-cache" {
+            http:Response|() cachedResponse = checkCache(llmProvider, cacheKey, prompts, requestId, rateLimit, remaining, reset);
+            if cachedResponse is http:Response {
+                return cachedResponse;
+            }
         }
+
         // Cache miss
         logEvent("DEBUG", "cache", "Cache miss", {
             requestId: requestId,
