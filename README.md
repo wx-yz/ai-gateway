@@ -110,6 +110,24 @@ Gateway automatiacally enable response caching to improve performance and save c
 
 Gateway configuration can be done using either the built-in admin UI or using the REST API
 
+### Admin UI
+
+Main Admin UI display current stats on the server
+
+<img width="1270" alt="admin-main" src="https://github.com/user-attachments/assets/d7d11794-f4c4-443c-8a4e-344fa286e024" />
+
+Configure Settings: system prompt, guardrails, and clear cache
+
+<img width="1274" alt="admin-settings" src="https://github.com/user-attachments/assets/f52c6b36-1e1c-46b0-a0d6-7f27e55a1a76" />
+
+Add/modify logging config
+
+<img width="1269" alt="admin-logging" src="https://github.com/user-attachments/assets/a1de999d-533c-4faa-ae3c-50e8567724dd" />
+
+Add/modify rate limiting policy
+
+<img width="1274" alt="admin-ratelimit" src="https://github.com/user-attachments/assets/5d34733c-d39a-4626-87fa-f085205b304c" />
+
 ### Add rate limiting
 
 ```shell
