@@ -249,6 +249,23 @@ Clear cache
 curl --location --request DELETE 'http://localhost:8081/admin/cache'
 ```
 
+### Publish logs to Elastic Search
+
+Configure following attributes in `Config.toml` to configure log publishing to Elastic Search
+```toml
+[defaultLoggingConfig]
+enableElasticSearch = true
+elasticSearchEndpoint = "http://localhost:9200"
+elasticApiKey = "T2FtMks1VUIzVG..."
+```
+After that at the server start, you should see an index being created in Elastic Search called "ai-gateway"
+
+![elastic-search-1](https://github.com/user-attachments/assets/bbd3bd87-36bb-4449-906d-e20e592e6b34)
+
+All ongoing logs will gets published to this index
+
+![elastic-search-2](https://github.com/user-attachments/assets/cb95071a-fe42-470a-99a2-725ad4e30c5f)
+
 ## Configuration reference ##
 
 Following is a complete example of all the configuration possible in the main gateway config file. At least one LLM provider config is mandatory
