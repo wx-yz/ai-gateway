@@ -2,6 +2,39 @@
 
 A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini, Ollama) with built-in analytics, guardrails, and administrative controls.
 
+## Getting Started
+
+1. Create file named `Config.toml` with following content
+```toml
+[openAIConfig]
+apiKey = "Your_API_Key"
+model = "gpt-4"
+endpoint = "https://api.openai.com"
+```
+2. Run below docker command
+```shell
+docker run -p \
+    8080:8080 -p 8081:8081 -p 8082:8082 \
+    -v $(pwd)/Config.toml:/home/ballerina/Config.toml \
+    chintana/ai-gateway:v1.1.0
+```
+3. Start sending requests
+```
+curl -X POST http://localhost:8080/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "x-llm-provider: openai" \
+    -d '
+{
+  "messages": [
+    {
+        "role": "user", 
+        "content": "Solve world hunger" 
+    }
+  ]
+}
+'
+```
+
 ## Feature Highlights
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, Ollama, and Cohere
