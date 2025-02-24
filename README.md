@@ -4,170 +4,279 @@ A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini
 
 ## Features Highlights
 
-- **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, or Ollama
+- **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, Ollama, and Cohere
 - **Automatic Failover**: When 2+ providers are configured, automatically fails over to alternative providers if primary provider fails
+- **Rate Limiting**: Rate limiting policies
+- **OpenAI compatible interface**: Standardized input and output based on OpenAI API inteface
 - **Response Caching**: In-memory cache with configurable TTL for improved performance and reduced API costs
 - **System Prompts**: Inject system prompts into all LLM requests
 - **Response Guardrails**: Configure content filtering and response constraints
 - **Analytics Dashboard**: Monitor usage, tokens, and errors with visual charts
+- **Admin UI**: Configure AI gateway
 - **Administrative Controls**: Configure gateway behavior via admin API
 
-## API Endpoints
+## HTTP API for chat completion
 
-Two endpoints are provided. Port 8080 for talking to external LLMs via /chat HTTP resource.
-
-Port 8081 for configuring the gateway itself. All admin tasks are done using /admin resource.
-
-### AI Gateway (Port 8080)
-
-```
-POST /chat
-Header: x-llm-provider: "openai" | "anthropic" | "gemini" | "ollama"
-Body: {
-    "prompt": "Your prompt here",
+OpenAI compatible request interface
+```shell
+curl --location 'http://localhost:8080/v1/chat/completions' \
+--header 'x-llm-provider: ollama' \
+--header 'Content-Type: application/json' \
+--data '{
+  "messages": [{ 
+        "role": "user",
+        "content": "When will we have AGI? In 10 words" 
+      }]
 }
-```
-### Admin API (Port 8081)
-
-#### System Prompt Injection ####
-
-Get current systemprompt
-```
-GET /admin/systemprompt
+'
 ```
 
-Add a system prompt to all outgoing prompts to LLM
-```
-POST /admin/systemprompt
+OpenAI API compatible response
+```json
 {
-    "prompt": "Respond only in Japanese"
+    "id": "01eff23c-208f-15a8-acdc-f400bba1bc6d",
+    "object": "chat.completion",
+    "created": 1740352553,
+    "model": "llama3.1:latest",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Estimating exact timeline uncertain, but likely within next few decades."
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 27,
+        "completion_tokens": 14,
+        "total_tokens": 41
+    }
 }
 ```
-#### Guardrails Configuration ####
 
-Get currently configured guardrails
-```
-GET /admin/guardrails
-```
+## gRPC API for chat completion
 
-Add guardrails. Currently only banned phrases and a disclaimer are supported.
-```
-POST /admin/guardrails
-{
-    "bannedPhrases": ["harmful", "inappropriate"],
-    "minLength": 10,
-    "maxLength": 2000,
-    "requireDisclaimer": true,
-    "disclaimer": "AI-generated response"
-}
-```
+An example client in Python is available in `grpc-client` folder
+```python
+def run():
+    # Create a gRPC channel
+    channel = grpc.insecure_channel('localhost:8082')
 
-#### Cache Management
-View cache contents
-```
-GET /admin/cache      # View cache 
-```
+    # Create a stub (client)
+    stub = ai_gateway_pb2_grpc.AIGatewayStub(channel)
 
-Clear cache
-```
-DELETE /admin/cache   # Clear cache
-```
+    # Create a request
+    request = ai_gateway_pb2.ChatCompletionRequest(
+        llm_provider="ollama",
+        messages=[
+            ai_gateway_pb2.Message(
+                role="system",
+                content="You are a helpful assistant."
+            ),
+            ai_gateway_pb2.Message(
+                role="user",
+                content="What is the capital of France?"
+            )
+        ]
+    )
 
-#### Analytics Dashboard ####
-HTML dashboard that displaying current gateway stats
-```
-GET /admin/stats
+    try:
+        # Make the call
+        response = stub.ChatCompletion(request)
+
+    # ...
 ```
 
-## Configuration ##
+## Switching between LLM providers
 
-At least one LLM config is mandatory. Checked at server startup
+Use `x-llm-provider` HTTP header to route to different providers. AI Gateway mask request format differences between providers. Always use OpenAI API compatible request format and the gateway will always respond in OpenAI compatible response
 
-Create a `Config.toml` file:
-```
-[openAIConfig]
-apiKey="your-api-key"
-endpoint="https://api.openai.com"
-model="gpt-3.5-turbo"
+| LLM Provider | Header name    | Header value |
+| ------------ | -------------- | ------------ |
+| OpenAI       | x-llm-provider | openai       |
+| Ollama       | x-llm-provider | ollama       |
+| Anthropic    | x-llm-provider | anthropic    |
+| Gemini       | x-llm-provider | gemini       |
+| Mistral      | x-llm-provider | mistral      |
+| Cohere       | x-llm-provider | cohere       |
 
-[anthropicConfig]
-apiKey="your-api-key"
-endpoint="https://api.anthropic.com"
-model="claude-3-opus-20240229"
+## Disable caching for requests
 
-[geminiConfig]
-apiKey="your-api-key"
-endpoint="https://generativelanguage.googleapis.com/v1/models"
-model="gemini-pro"
+Gateway automatiacally enable response caching to improve performance and save costs. The default cache duration is 1 hour. If you specifically wants to disable caching for equests, then send `Cache-Control: no-cache` HTTP header with each request
 
-[ollamaConfig]
-apiKey=""
-endpoint="http://localhost:11434"
-model="llama2"
-```
+## Gateway configuration
 
-## Testing Examples ##
- 
-1. Send a chat request to OpenAI:
-```bash
-curl -X POST http://localhost:8080/chat \
-  -H "llmProvider: openai" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "What is the capital of France?"}'
-```
+Gateway configuration can be done using either the built-in admin UI or using the REST API
 
-2. Configure system prompt:
-```bash
-curl -X POST http://localhost:8081/admin/systemprompt \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "You are a helpful assistant that always responds briefly"}'
-```
+### Add rate limiting
 
-3. Set up guardrails:
-```bash
-curl -X POST http://localhost:8081/admin/guardrails \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bannedPhrases": ["harmful"],
-    "minLength": 10,
-    "maxLength": 1000,
-    "requireDisclaimer": true,
-    "disclaimer": "This is an AI-generated response"
+```shell
+curl --location 'http://localhost:8081/admin/ratelimit' \
+--header 'Content-Type: application/json' \
+--data '{
+    "name": "basic",
+    "requestsPerWindow": 5,
+    "windowSeconds": 60
   }'
 ```
 
-4. Clear cache:
-```bash
-curl -X DELETE http://localhost:8081/admin/cache
+Once rate limiting is enbaled, following 3 HTTP response headers will be used to announce current limits. These will be added to every HTTP response generated by the gateway
+
+| Header name     | Value  | Description |
+| --------------- | ------ | ----------- |
+| RateLimit-Limit | number | Maximum number of requests allowed in the current policy |
+| RateLimit-Remaining | number | Number of requests that can be sent before rate limit policy is enforced |
+| RateLimit-Reset | number | How many seconds until current rate limit policy is reset
+
+Following GET call will return the currently configured rate limiting policy. If the request is empty then rate limiting is disabled
+
+```shell
+curl --location 'http://localhost:8081/admin/ratelimit' \
+--data ''
+```
+Respnose
+```json
+{
+    "name": "basic",
+    "requestsPerWindow": 5,
+    "windowSeconds": 60
+}
 ```
 
-## Testing screenshots ##
+### Automatic failover
 
-Chatting, prompt used: "Say hello and identify yourself"
+When 2 or more LLM providers are configured, the gateway will attempt automatic failover if there's no successful response from the provider user has chosen through `x-llm-provider` header.
 
-![Screenshot 2025-02-14 181101](https://github.com/user-attachments/assets/8269e3f7-ea9b-4ed7-a0fd-1fc693c25ec9)
+The logs will dispaly a trail of failover like below. Here, the user is trying to send the request to Ollama. We have Ollama and OpenAI configured in the gateway.
 
-Injecting system prompt from the admin interface
+First we can see a failed message. Following logs are formatted for clarity.
+```
+{
+  "timestamp": "2025-02-24T00:33:51.127868Z",
+  "level": "WARN",
+  "component": "failover",
+  "message": "Primary provider failed",
+  "metadata": {
+    "requestId": "01eff247-0444-1eb0-b153-61183107b722",
+    "provider": "ollama",
+    "error": "Something wrong with the connection:{}"
+  }
+}
+```
+First attempt to failover,
+```
+{
+  "timestamp": "2025-02-24T00:33:51.129457Z",
+  "level": "INFO",
+  "component": "failover",
+  "message": "Attempting failover",
+  "metadata": {
+    "requestId": "01eff247-0444-1eb0-b153-61183107b722",
+    "provider": "openai"
+  }
+}
+```
 
-![Screenshot 2025-02-14 181114](https://github.com/user-attachments/assets/b276f1e9-edce-4041-b634-41f411fbe48e)
+### System Prompt Injection ###
 
-Request not changed. Changed the model to ollama via custom HTTP header
+Admins can use the admin API to inject a system prompt for all out going requests. This will be appended to the system prompt if a user has supplied one in the request
+```shell
+curl --location 'http://localhost:8081/admin/systemprompt' \
+--header 'Content-Type: application/json' \
+--data '{
+    "prompt": "respond only in chinese"
+}'
+```
 
-![Screenshot 2025-02-14 181140](https://github.com/user-attachments/assets/925ce2cd-75a1-48d5-be28-8b00c211b130)
+Following GET request will show current system prompt
+```shell
+curl --location 'http://localhost:8081/admin/systemprompt'
+```
 
-Adding guardrails. Added word "hello"
+### Enforcing guardrails ###
 
-![Screenshot 2025-02-14 181220](https://github.com/user-attachments/assets/5090e045-0c9a-4b8c-a06b-a4bf72c530a5)
+Use the following API call to add guardrails
+```shell
+curl --location 'http://localhost:8081/admin/guardrails' \
+--header 'Content-Type: application/json' \
+--data '{
+    "bannedPhrases": ["obscene", "words"],
+    "minLength": 0,
+    "maxLength": 500000,
+    "requireDisclaimer": false
+}'
+```
 
-At this point, removed the system prompt and it defauts to English. Now sending the same request
+Get currently configured guardrails
+```
+curl --location 'http://localhost:8081/admin/guardrails' \
+--data ''
+```
 
-![Screenshot 2025-02-14 181234](https://github.com/user-attachments/assets/11566a9b-7a58-4f5a-ae35-6f2eba76a78e)
+### Cache Management
 
-## View analytics ##
+Gateway automatically enbale response caching for requests to save costs and enable responsiveness. Default cache duration is 1 hour. When requests are served from the cache, there will be a respective log printed to the logs.
 
-- Open `http://localhost:8081/admin/stats` in your browser
+The gateway will look for `Cache-Control: no-cache` header and will disable cache lookup for those requests
 
-![Screenshot 2025-02-14 181359](https://github.com/user-attachments/assets/38af88c6-c7fe-448b-b4a5-8a193416fcc8)
+View current cached contents
+```shell
+curl --location 'http://localhost:8081/admin/cache'
+```
+
+Clear cache
+```shell
+curl --location --request DELETE 'http://localhost:8081/admin/cache'
+```
+
+## Configuration reference ##
+
+Following is a complete example of all the configuration possible in the main gateway config file. At least one LLM provider config is mandatory
+
+Create a `Config.toml` file:
+```
+[defaultLoggingConfig]
+enableElasticSearch = false
+elasticSearchEndpoint = "http://localhost:9200"
+elasticApiKey = ""
+enableSplunk = false
+splunkEndpoint = ""
+enableDatadog = false
+datadogEndpoint = ""
+
+[openAIConfig]
+apiKey="your-api-key"
+endpoint="https://api.openai.com"
+model="gpt-4o"
+
+[anthropicConfig]
+apiKey="your-api-key"
+model="claude-3-5-sonnet-20241022"
+endpoint="https://api.anthropic.com"
+
+[geminiConfig]
+apiKey="your-api-key"
+model="gemini-pro"
+endpoint="https://generativelanguage.googleapis.com/v1/models"
+
+
+[ollamaConfig]
+apiKey=""
+model="llama3.2"
+endpoint="http://localhost:11434"
+
+[mistralConfig]
+apiKey = ""
+model = "mistral-small-latest"
+endpoint = "https://api.mistral.ai"
+
+[cohereConfig]
+apiKey = ""
+model = "command-r-plus-08-2024"
+endpoint = "https://api.cohere.com"
+```
 
 ## Development
 
