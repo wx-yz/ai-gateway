@@ -35,6 +35,36 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 '
 ```
 
+Use any OpenAI compatible SDK to talk to the gateway. Following example use official OpenAI Python SDK
+
+1. Install OpenAI official Python SDK
+```shell
+ pip install openai
+```
+
+2. Example client. Note that setting the model and api key is enforced by the SDK. However these will be ignored by the gateway and will use whatever model and key configured at the gateway.
+```python
+import openai
+
+openai.api_key = '...' # Required by the SDK, AI Gateway will ignore this
+
+# all client options can be configured just like the `OpenAI` instantiation counterpart
+openai.base_url = "http://localhost:8080/v1/"
+openai.default_headers = {"x-llm-provider": "openai"}
+
+# Setting the model is enforced by the SDK. AI Gateway will ignore this value
+completion = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": "Solve world hunger",
+        },
+    ],
+)
+print(completion.choices[0].message.content)
+```
+
 ## Feature Highlights
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, Ollama, and Cohere
