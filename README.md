@@ -35,6 +35,8 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 '
 ```
 
+## Compatible with OpenAI SDK
+
 Use any OpenAI compatible SDK to talk to the gateway. Following example use official OpenAI Python SDK
 
 1. Install OpenAI official Python SDK
