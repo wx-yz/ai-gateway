@@ -2,7 +2,7 @@
 
 A configurable API gateway for multiple LLM providers (OpenAI, Anthropic, Gemini, Ollama) with built-in analytics, guardrails, and administrative controls.
 
-## Features Highlights
+## Feature Highlights
 
 - **Multi-Provider Support**: Route requests to OpenAI, Anthropic, Gemini, Ollama, and Cohere
 - **Automatic Failover**: When 2+ providers are configured, automatically fails over to alternative providers if primary provider fails
