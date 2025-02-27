@@ -863,13 +863,27 @@ function checkCache(string llmProvider, string cacheKey, [string,string] prompts
     return ();
 }
 
-service / on new http:Listener(8080) {
+// Response interceptor
+service class ResponseInterceptor {
+    *http:ResponseInterceptor;
+
+    remote function interceptResponse(http:RequestContext ctx, http:Response res) returns http:NextService|error? {
+        res.setHeader("Server", "ai-gateway/v1.1.0");
+        return ctx.next();
+    }
+}
+
+service http:InterceptableService / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
     private http:Client? geminiClient = ();
     private http:Client? ollamaClient = ();
     private http:Client? mistralClient = ();
     private http:Client? cohereClient = ();
+
+    public function createInterceptors() returns ResponseInterceptor {
+        return new ResponseInterceptor();
+    }
 
     function init() returns error? {
         logEvent("INFO", "HTTP:init", "Initializing AI Gateway");
@@ -1225,9 +1239,13 @@ analytics:ErrorStats errorStats = {
 };
 
 // Add new admin service
-service /admin on new http:Listener(8081) {
+service http:InterceptableService /admin on new http:Listener(8081) {
     // Template HTML for analytics
     string statsTemplate = "";
+
+    public function createInterceptors() returns ResponseInterceptor {
+        return new ResponseInterceptor();
+    }
 
     function init() returns error? {
         self.statsTemplate = check io:fileReadString("resources/stats.html");
