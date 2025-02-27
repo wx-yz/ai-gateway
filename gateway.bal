@@ -7,6 +7,7 @@ import ai_gateway.logging;
 import ballerina/time;
 import ballerina/uuid;
 import ballerina/grpc;
+import ballerina/crypto;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -814,65 +815,98 @@ function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) retu
     }
 }
 
-function checkCache(string llmProvider, string cacheKey, [string,string] prompts, string requestId, int rateLimit, int remaining, int reset) returns http:Response|() {
-
-    // Check cache first
-    if (promptCache.hasKey(cacheKey)) {
-        logEvent("DEBUG", "cache", "Checking cache entry", {
-            requestId: requestId,
-            cacheKey: cacheKey
-        });
-        
-        CacheEntry entry = promptCache.get(cacheKey);
-        int currentTime = time:utcNow()[0];
-        
-        // Check if cache entry is still valid
-        if (currentTime - entry.timestamp < cacheTTLSeconds) {
-            logEvent("INFO", "cache", "Cache hit", {
-                requestId: requestId,
-                cacheKey: cacheKey
-            });
-            // Update cache stats
-            lock {
-                requestStats.totalRequests += 1;
-                requestStats.cacheHits += 1;
-                requestStats.requestsByProvider[llmProvider] = (requestStats.requestsByProvider[llmProvider] ?: 0) + 1;
-                requestStats.successfulRequests += 1;
-                tokenStats.totalInputTokens += entry.response.usage.prompt_tokens;
-                tokenStats.totalOutputTokens += entry.response.usage.completion_tokens;
-                tokenStats.inputTokensByProvider[llmProvider] = (tokenStats.inputTokensByProvider[llmProvider] ?: 0) + entry.response.usage.prompt_tokens;
-                tokenStats.outputTokensByProvider[llmProvider] = (tokenStats.outputTokensByProvider[llmProvider] ?: 0) + entry.response.usage.completion_tokens;
-            }
-            http:Response cachedResponse = new;
-            if currentRateLimitPlan != () {
-                cachedResponse.setHeader("RateLimit-Limit", rateLimit.toString());
-                cachedResponse.setHeader("RateLimit-Remaining", remaining.toString());
-                cachedResponse.setHeader("RateLimit-Reset", reset.toString());
-            }
-            cachedResponse.setPayload(entry.response);
-            return cachedResponse;
-        } else {
-            logEvent("DEBUG", "cache", "Cache entry expired", {
-                requestId: requestId,
-                cacheKey: cacheKey,
-                age: currentTime - entry.timestamp
-            });
-            _ = promptCache.remove(cacheKey);
-        }
-    }
-    return ();
-}
-
-// Response interceptor
 service class ResponseInterceptor {
     *http:ResponseInterceptor;
 
     remote function interceptResponse(http:RequestContext ctx, http:Response res) returns http:NextService|error? {
         res.setHeader("Server", "ai-gateway/v1.1.0");
         return ctx.next();
+    } 
+}
+
+// Add request interceptor for cache handling
+service class RequestInterceptor {
+    *http:RequestInterceptor;
+
+    resource function 'default[string... path](http:RequestContext ctx, http:Request req) returns http:NextService|http:Response|error? {
+        // Only intercept POST requests to chat completions endpoint
+        // if req.method != "POST" || !req.rawPath.startsWith("/v1/chat/completions") {
+        //     return ctx.next();
+        // }
+
+        log:printInfo("START REQUEST INTERCEPTOR ----------------------------");
+
+        // Check Cache-Control header
+        string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
+        if cacheControl is string && cacheControl == "no-cache" {
+            return ctx.next();
+        }
+
+        // Get provider and payload
+        string|http:HeaderNotFoundError provider = req.getHeader("x-llm-provider");
+        if provider is http:HeaderNotFoundError {
+            return ctx.next();
+        }
+
+        json|error payload = req.getJsonPayload();
+        if payload is error {
+            return ctx.next();
+        }
+
+        // Generate cache key using SHA1
+        string cacheKey = check generateCacheKey(provider, payload);
+
+        log:printInfo(">>>>>>>>>>>>>>>>>>>>>>>>>> " + cacheKey);
+        
+        // Check cache
+        if promptCache.hasKey(cacheKey) {
+            CacheEntry entry = promptCache.get(cacheKey);
+            int currentTime = time:utcNow()[0];
+            
+            // Check if cache entry is still valid
+            if (currentTime - entry.timestamp < cacheTTLSeconds) {
+                logEvent("INFO", "cache", "Cache hit", {
+                    cacheKey: cacheKey
+                });
+                
+                // Update cache stats
+                lock {
+                    requestStats.totalRequests += 1;
+                    requestStats.cacheHits += 1;
+                    requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                    tokenStats.totalInputTokens += entry.response.usage.prompt_tokens;
+                    tokenStats.totalOutputTokens += entry.response.usage.completion_tokens;
+                    tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + entry.response.usage.prompt_tokens;
+                    tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + entry.response.usage.completion_tokens;
+                }
+
+                // Set cached response
+                http:Response cachedResponse = new;
+                cachedResponse.setPayload(entry.response);
+                return  cachedResponse;                
+            } else {
+                logEvent("DEBUG", "cache", "Cache entry expired", {
+                    cacheKey: cacheKey,
+                    age: currentTime - entry.timestamp
+                });
+                _ = promptCache.remove(cacheKey);
+            }
+        }
+
+        // Store cache key in context for later use
+        ctx.set("cacheKey", cacheKey);
+        return ctx.next();
     }
 }
 
+// Add helper function to generate cache key
+function generateCacheKey(string provider, json payload) returns string|error {
+    // byte[] hash = crypto:hashSha1(provider.toBytes().concat(payload.toString().toBytes()));
+    byte[] hash = crypto:hashSha1((provider+payload.toString()).toBytes());
+    return hash.toBase16();
+}
+
+// Update service to use both interceptors
 service http:InterceptableService / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
@@ -881,8 +915,8 @@ service http:InterceptableService / on new http:Listener(8080) {
     private http:Client? mistralClient = ();
     private http:Client? cohereClient = ();
 
-    public function createInterceptors() returns ResponseInterceptor {
-        return new ResponseInterceptor();
+    public function createInterceptors() returns [RequestInterceptor, ResponseInterceptor] {
+        return [new RequestInterceptor(), new ResponseInterceptor()];
     }
 
     function init() returns error? {
@@ -961,10 +995,10 @@ service http:InterceptableService / on new http:Listener(8080) {
     }
 
     resource function post v1/chat/completions(
-            @http:Header {name: "x-llm-provider"} string llmProvider, 
-            @http:Header {name: "Cache-Control"} string? cacheControl,
+            @http:Header {name: "x-llm-provider"} string llmProvider,
             @http:Payload llms:LLMRequest payload,
-            http:Request request) returns error|http:Response|llms:LLMResponse {
+            http:Request request,
+            http:RequestContext ctx) returns error|http:Response|llms:LLMResponse {
         string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
 
         // TODO: Use the client IP address from the request
@@ -1008,22 +1042,6 @@ service http:InterceptableService / on new http:Listener(8080) {
             requestId: requestId,
             provider: llmProvider,
             prompt: prompts.toString()
-        });
-
-        // check cache first
-        string cacheKey = llmProvider + ":" + prompts.toString();
-        // Skip cache if there's Cache-Control: no-cache header
-        if cacheControl == "" || cacheControl != "no-cache" {
-            http:Response|() cachedResponse = checkCache(llmProvider, cacheKey, prompts, requestId, rateLimit, remaining, reset);
-            if cachedResponse is http:Response {
-                return cachedResponse;
-            }
-        }
-
-        // Cache miss
-        logEvent("DEBUG", "cache", "Cache miss", {
-            requestId: requestId,
-            cacheKey: cacheKey
         });
 
         // Get list of available providers
@@ -1094,15 +1112,18 @@ service http:InterceptableService / on new http:Listener(8080) {
             return llmResponse;
         }
 
-        // Cache successful response
-        promptCache[cacheKey] = {
-            response: llmResponse,
-            timestamp: time:utcNow()[0]
-        };
-        logEvent("DEBUG", "cache", "Cached response", {
-            requestId: requestId,
-            cacheKey: cacheKey
-        });
+        // Cache successful response using key from context
+        string cacheKey = check generateCacheKey(llmProvider, payload.toJson());
+        log:printInfo("###################################### " + cacheKey);
+        if cacheKey is string {
+            promptCache[cacheKey] = {
+                response: llmResponse,
+                timestamp: time:utcNow()[0]
+            };
+            logEvent("DEBUG", "cache", "Cached response", {
+                cacheKey: cacheKey
+            });
+        }
 
         // Add rate limit headers to response context
         if currentRateLimitPlan != () {
@@ -1179,9 +1200,8 @@ service http:InterceptableService / on new http:Listener(8080) {
         });
         return error("Provider not configured: " + provider);
     }
-
-  
 }
+
 function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
         string systemPrompt = "";
         string userPrompt = "";
