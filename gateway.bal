@@ -8,6 +8,7 @@ import ballerina/time;
 import ballerina/uuid;
 import ballerina/grpc;
 import ballerina/crypto;
+import ai_gateway.guardrails;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -28,45 +29,13 @@ configurable GatewayConfig gateway = {};
 // Add system prompt storage
 string systemPrompt = "";
 
-// Add guardrails configuration type
-type GuardrailConfig record {
-    string[] bannedPhrases;
-    int minLength;
-    int maxLength;
-    boolean requireDisclaimer;
-    string disclaimer?;
-};
-
 // Add guardrails storage
-GuardrailConfig guardrails = {
+guardrails:GuardrailConfig guardrails = {
     bannedPhrases: [],
     minLength: 0,
     maxLength: 500000,
     requireDisclaimer: false
 };
-
-// Add guardrails processing function
-function applyGuardrails(string text) returns string|error {
-    if (text.length() < guardrails.minLength) {
-        return error("Response too short. Minimum length: " + guardrails.minLength.toString());
-    }
-    string textRes = text;
-    if (text.length() > guardrails.maxLength) {
-        textRes = text.substring(0, guardrails.maxLength);
-    }
-
-    foreach string phrase in guardrails.bannedPhrases {
-        if (text.toLowerAscii().includes(phrase)) {
-            return error("Response contains banned phrase: " + phrase);
-        }
-    }
-
-    if (guardrails.requireDisclaimer && guardrails.disclaimer != null) {
-        textRes = text + "\n\n" + (guardrails.disclaimer ?: "");
-    }
-
-    return textRes;
-}
 
 // Add cache type and storage
 type CacheEntry record {
@@ -456,7 +425,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
         }
 
         // Apply guardrails
-        string|error guardedText = applyGuardrails(openAIResponse.choices[0].message.content);
+        string|error guardedText = guardrails:applyGuardrails(guardrails, openAIResponse.choices[0].message.content);
         if guardedText is error {
             logEvent("ERROR", "guardrails", "Guardrails check failed", {
                 requestId,
@@ -527,7 +496,7 @@ function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) retu
         llms:OllamaResponse ollamaResponse = check responsePayload.cloneWithType(llms:OllamaResponse);
 
         // Apply guardrails before returning
-        string guardedText = check applyGuardrails(ollamaResponse.message.content);
+        string guardedText = check guardrails:applyGuardrails(guardrails, ollamaResponse.message.content);
 
         return {
             id: uuid:createType1AsString(),
@@ -592,7 +561,7 @@ function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req
         llms:AnthropicResponse anthropicResponse = check responsePayload.cloneWithType(llms:AnthropicResponse);
         
         // Apply guardrails before returning
-        string guardedText = check applyGuardrails(anthropicResponse.contents.content[0].text);
+        string guardedText = check guardrails:applyGuardrails(guardrails, anthropicResponse.contents.content[0].text);
         return {
             id: uuid:createType1AsString(),
             'object: "chat.completion",
@@ -655,7 +624,7 @@ function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) retu
         llms:OpenAIResponse geminiResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
-        string guardedText = check applyGuardrails(geminiResponse.choices[0].message.content);
+        string guardedText = check guardrails:applyGuardrails(guardrails, geminiResponse.choices[0].message.content);
         return {
             id: uuid:createType1AsString(),
             'object: "chat.completion",
@@ -716,7 +685,7 @@ function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) re
         llms:OpenAIResponse mistralResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
-        string guardedText = check applyGuardrails(mistralResponse.choices[0].message.content);
+        string guardedText = check guardrails:applyGuardrails(guardrails, mistralResponse.choices[0].message.content);
 
         return {
             id: uuid:createType1AsString(),
@@ -788,7 +757,7 @@ function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) retu
         llms:CohereResponse cohereResponse = check responsePayload.cloneWithType(llms:CohereResponse);
         
         // Apply guardrails before returning
-        string guardedText = check applyGuardrails(cohereResponse.text);
+        string guardedText = check guardrails:applyGuardrails(guardrails, cohereResponse.text);
 
         return {
             id: uuid:createType1AsString(),
@@ -1282,12 +1251,12 @@ service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Add guardrails endpoints
-    resource function post guardrails(@http:Payload GuardrailConfig config) returns string|error {
+    resource function post guardrails(@http:Payload guardrails:GuardrailConfig config) returns string|error {
         guardrails = config;
         return "Guardrails updated successfully";
     }
 
-    resource function get guardrails() returns GuardrailConfig {
+    resource function get guardrails() returns guardrails:GuardrailConfig {
         return guardrails;
     }
 
