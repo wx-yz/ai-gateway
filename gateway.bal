@@ -83,6 +83,17 @@ type RateLimitState record {|
 map<RateLimitState> rateLimitStates = {};
 RateLimitPlan? currentRateLimitPlan = ();
 
+// Add service route configuration
+type ServiceRoute record {|
+    string name;
+    string endpoint;
+    boolean enableCache = true;
+    boolean enableRateLimit = true;
+|};
+
+// Store configured routes
+map<ServiceRoute> serviceRoutes = {};
+
 // Add rate limiting function
 function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
     if currentRateLimitPlan is () {
@@ -775,8 +786,6 @@ service class RequestInterceptor {
         //     return ctx.next();
         // }
 
-        log:printInfo("START REQUEST INTERCEPTOR ----------------------------");
-
         // Check Cache-Control header
         string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
         if cacheControl is string && cacheControl == "no-cache" {
@@ -1074,6 +1083,181 @@ service http:InterceptableService / on new http:Listener(8080) {
         return response;
     }
 
+        // This function handles all requests to the /services/{serviceName} path
+    resource function 'default [string serviceName]/[string... path](
+        http:Request req, 
+        http:RequestContext ctx) returns http:Response|error {
+        
+        string requestId = uuid:createType1AsString();
+
+        string routeName = path[0];
+
+        // Check if the service exists
+        if !serviceRoutes.hasKey(routeName) {
+            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Service not found", {
+                requestId: requestId,
+                serviceName: routeName
+            });
+            http:Response res = new;
+            res.statusCode = 404;
+            res.setPayload({ 'error: "Service not found: " + routeName });
+            return res;
+        }
+        
+        ServiceRoute|() route = serviceRoutes[routeName] ?: ();
+        if route is () {
+            // no route, log and return
+            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Service not found", {
+                requestId: requestId,
+                serviceName: routeName
+            });
+            return error("Service not found");
+        }
+        
+        // Check rate limits if enabled for this route
+        if route.enableRateLimit && currentRateLimitPlan != () {
+            string|http:HeaderNotFoundError clientIP = req.getHeader("X-Forwarded-For");
+            if clientIP is string {
+            // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
+                [boolean, int, int, int] rateLimitRespones = check checkRateLimit(clientIP);
+                boolean allowed = rateLimitRespones[0];
+                int 'limit = rateLimitRespones[1];
+                int remaining = rateLimitRespones[2];
+                int reset = rateLimitRespones[3];
+                
+                if !allowed {
+                    logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "apigateway", "Rate limit exceeded", {
+                        requestId: requestId,
+                        serviceName: routeName,
+                        clientIP: clientIP
+                    });
+                    http:Response res = new;
+                    res.statusCode = 429;
+                    res.setHeader("RateLimit-Limit", 'limit.toString());
+                    res.setHeader("RateLimit-Remaining", remaining.toString());
+                    res.setHeader("RateLimit-Reset", reset.toString());
+                    res.setPayload({ 'error: "Rate limit exceeded" });
+                    return res;
+                }
+            } else {
+                // log
+                logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "apigateway", "X-Forwarded-For header not found", {
+                    requestId: requestId,
+                    serviceName: routeName
+                });
+            }
+        }
+        
+        // Check cache if enabled for this route and it's a GET request
+        // string cacheKey = "";
+        // if route.enableCache && req.method == "GET" {
+        //     // Skip cache if Cache-Control: no-cache is set
+        //     string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
+        //     if !(cacheControl is string && cacheControl == "no-cache") {
+        //         // Generate cache key based on service name, path and query params
+        //         string pathStr = "/" + string:'join("/", ...path);
+        //         string queryStr = req.getQueryParams().toString();
+        //         cacheKey = crypto:hashSha1((serviceName + pathStr + queryStr).toBytes()).toBase16();
+                
+        //         // Check if response is in cache
+        //         if promptCache.hasKey(cacheKey) {
+        //             CacheEntry entry = promptCache.get(cacheKey);
+        //             int currentTime = time:utcNow()[0];
+                    
+        //             if (currentTime - entry.timestamp < cacheTTLSeconds) {
+        //                 logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "apigateway", "Cache hit", {
+        //                     requestId: requestId,
+        //                     serviceName: serviceName,
+        //                     cacheKey: cacheKey
+        //                 });
+                        
+        //                 // Update stats
+        //                 lock {
+        //                     requestStats.totalRequests += 1;
+        //                     requestStats.cacheHits += 1;
+        //                 }
+                        
+        //                 http:Response res = new;
+        //                 res.setPayload(entry.response);
+        //                 return res;
+        //             } else {
+        //                 // Remove expired entry
+        //                 _ = promptCache.remove(cacheKey);
+        //             }
+        //         }
+        //     }
+        // }
+        
+        // Create client for backend service
+        http:Client|error backendClient = new (route.endpoint);
+        if backendClient is error {
+            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Failed to create backend client", {
+                requestId: requestId,
+                serviceName: routeName,
+                endpoint: route.endpoint,
+                'error: backendClient.message()
+            });
+            return error("Failed to connect to backend service: " + backendClient.message());
+        }
+        
+        // Construct backend path
+        // string backendPath = "/" + string:'join("/", ...path);
+        string[] pathURL = path.slice(1, path.length());
+        string backendPath = "/" + string:'join("/", ...pathURL);
+        if req.getQueryParams() != {} {
+            backendPath = backendPath + "?" + req.getQueryParams().toString();
+        }
+        
+        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "apigateway", "Forwarding request", {
+            requestId: requestId,
+            serviceName: routeName,
+            method: req.method,
+            path: backendPath,
+            endpoint: route.endpoint
+        });
+        
+        // Forward the request to the backend
+        http:Response|error response;
+        match req.method {
+            "GET" => {
+                // response = backendClient->get(backendPath, req);
+                response = backendClient->get(backendPath, {});
+            }
+            "POST" => {
+                response = backendClient->post(backendPath, req);
+            }
+            "PUT" => {
+                response = backendClient->put(backendPath, req);
+            }
+            "DELETE" => {
+                response = backendClient->delete(backendPath, req);
+            }
+            "PATCH" => {
+                response = backendClient->patch(backendPath, req);
+            }
+            _ => {
+                response = error("Unsupported HTTP method: " + req.method);
+            }
+        }
+        
+        if response is error {
+            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Backend request failed", {
+                requestId: requestId,
+                serviceName: routeName,
+                'error: response.message()
+            });
+            return response;
+        }
+        
+        // Update stats
+        // lock {
+        //     requestStats.totalRequests += 1;
+        //     requestStats.successfulRequests += 1;
+        // }
+        
+        return response;
+    }
+
     // Helper function to try a specific provider
     private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
         string requestId = uuid:createType1AsString();
@@ -1368,4 +1552,54 @@ service http:InterceptableService /admin on new http:Listener(8081) {
             }
         };
     }
+
+    // Get all configured routes
+    resource function get routes() returns map<ServiceRoute>|error {
+        return serviceRoutes;
+    }
+    
+    // Get a specific route
+    resource function get routes/[string name]() returns ServiceRoute|error? {
+        if serviceRoutes.hasKey(name) {
+            return serviceRoutes[name];
+        }
+        return error("Service route not found: " + name);
+    }
+    
+    // Create or update a route
+    resource function post routes(@http:Payload ServiceRoute payload) returns string|error {
+        if payload.name == "" {
+            return error("Service name is required");
+        }
+        
+        if payload.endpoint == "" {
+            return error("Service endpoint is required");
+        }
+        
+        serviceRoutes[payload.name] = payload;
+        
+        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Service route configured", {
+            name: payload.name,
+            endpoint: payload.endpoint,
+            enableCache: payload.enableCache,
+            enableRateLimit: payload.enableRateLimit
+        });
+        
+        return "Service route configured successfully: " + payload.name;
+    }
+    
+    // Delete a route
+    resource function delete routes/[string name]() returns string|error {
+        if serviceRoutes.hasKey(name) {
+            _ = serviceRoutes.remove(name);
+            
+            logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Service route deleted", {
+                name: name
+            });
+            
+            return "Service route deleted successfully: " + name;
+        }
+        
+        return error("Service route not found: " + name);
+    }    
 }
