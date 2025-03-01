@@ -19,6 +19,44 @@ type LogEntry record {
     time:Utc timestamp;
 };
 
+public function logEvent(boolean isVerboseLogging, LoggingConfig loggingConfig, string level, string component, string message, map<json> metadata = {}) {
+    if (!isVerboseLogging && level == "DEBUG") {
+        return;
+    }
+
+    // Create a copy of metadata to avoid modifying the original
+    map<any> sanitizedMetadata = metadata.clone();
+
+    // Mask sensitive data in metadata
+    foreach string key in sanitizedMetadata.keys() {
+        if (key.toLowerAscii().includes("apikey")) {
+            sanitizedMetadata[key] = "********";
+        }
+    }
+
+    json logEntry = {
+        timestamp: time:utcToString(time:utcNow()),
+        level: level,
+        component: component,
+        message: message,
+        metadata: sanitizedMetadata.toString()
+    };
+
+    // Always log to console
+    log:printInfo(logEntry.toString());
+
+    // Publish to configured services
+    if (loggingConfig.enableSplunk) {
+        _ = start publishToSplunk(loggingConfig, logEntry);
+    }
+    if (loggingConfig.enableDatadog) {
+        _ = start publishToDatadog(loggingConfig, logEntry);
+    }
+    if (loggingConfig.enableElasticSearch) {
+        _ = start publishToElasticSearch(loggingConfig, logEntry);
+    }
+}
+
 public function publishToSplunk(LoggingConfig loggingConfig, json logEntry) returns error? {
     if (loggingConfig.splunkEndpoint != "") {
         http:Client splunkClient = check new (loggingConfig.splunkEndpoint);
