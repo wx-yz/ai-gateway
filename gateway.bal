@@ -520,7 +520,6 @@ public isolated function handleOllamaRequest(http:Client ollamaClient, llms:LLMR
         http:Response response = check ollamaClient->post("/api/chat", ollamaPayload, headers);
 
         json responsePayload = check response.getJsonPayload();
-        log:printInfo("########### Ollama response: " + responsePayload.toString());
         llms:OllamaResponse ollamaResponse = check responsePayload.cloneWithType(llms:OllamaResponse);
 
         // Apply guardrails before returning
@@ -1711,6 +1710,10 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
         lock {
             tStats = tokenStats.cloneReadOnly();
         }
+        int totalCacheSize = 0;
+        lock {
+            totalCacheSize = promptCache.keys().length();
+        }
         return {
             overview: {
                 totalRequests: rStats.totalRequests,
@@ -1737,7 +1740,7 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
             cache: {
                 hits: rStats.cacheHits,
                 misses: rStats.cacheMisses,
-                size: rStats.length()
+                size: totalCacheSize
             }
         };
     }
