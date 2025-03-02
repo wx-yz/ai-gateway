@@ -84,7 +84,7 @@ print(completion.choices[0].message.content)
 
 OpenAI compatible request interface
 ```shell
-curl --location 'http://localhost:8080/v1/chat/completions' \
+curl -X POST 'http://localhost:8080/v1/chat/completions' \
 --header 'x-llm-provider: ollama' \
 --header 'Content-Type: application/json' \
 --data '{
@@ -196,7 +196,7 @@ Add/modify rate limiting policy
 ### Add rate limiting
 
 ```shell
-curl --location 'http://localhost:8081/admin/ratelimit' \
+curl -X POST 'http://localhost:8081/admin/ratelimit' \
 --header 'Content-Type: application/json' \
 --data '{
     "name": "basic",
@@ -216,8 +216,7 @@ Once rate limiting is enbaled, following 3 HTTP response headers will be used to
 Following GET call will return the currently configured rate limiting policy. If the request is empty then rate limiting is disabled
 
 ```shell
-curl --location 'http://localhost:8081/admin/ratelimit' \
---data ''
+curl -X GET 'http://localhost:8081/admin/ratelimit'
 ```
 Respnose
 ```json
@@ -235,7 +234,7 @@ When 2 or more LLM providers are configured, the gateway will attempt automatic 
 The logs will dispaly a trail of failover like below. Here, the user is trying to send the request to Ollama. We have Ollama and OpenAI configured in the gateway.
 
 First we can see a failed message. Following logs are formatted for clarity.
-```
+```json
 {
   "timestamp": "2025-02-24T00:33:51.127868Z",
   "level": "WARN",
@@ -249,7 +248,7 @@ First we can see a failed message. Following logs are formatted for clarity.
 }
 ```
 First attempt to failover,
-```
+```json
 {
   "timestamp": "2025-02-24T00:33:51.129457Z",
   "level": "INFO",
@@ -266,7 +265,7 @@ First attempt to failover,
 
 Admins can use the admin API to inject a system prompt for all out going requests. This will be appended to the system prompt if a user has supplied one in the request
 ```shell
-curl --location 'http://localhost:8081/admin/systemprompt' \
+curl -X POST 'http://localhost:8081/admin/systemprompt' \
 --header 'Content-Type: application/json' \
 --data '{
     "prompt": "respond only in chinese"
@@ -275,14 +274,14 @@ curl --location 'http://localhost:8081/admin/systemprompt' \
 
 Following GET request will show current system prompt
 ```shell
-curl --location 'http://localhost:8081/admin/systemprompt'
+curl -X GET 'http://localhost:8081/admin/systemprompt'
 ```
 
 ### Enforcing guardrails ###
 
 Use the following API call to add guardrails
 ```shell
-curl --location 'http://localhost:8081/admin/guardrails' \
+curl -X POST 'http://localhost:8081/admin/guardrails' \
 --header 'Content-Type: application/json' \
 --data '{
     "bannedPhrases": ["obscene", "words"],
@@ -293,9 +292,8 @@ curl --location 'http://localhost:8081/admin/guardrails' \
 ```
 
 Get currently configured guardrails
-```
-curl --location 'http://localhost:8081/admin/guardrails' \
---data ''
+```shell
+curl -X GET 'http://localhost:8081/admin/guardrails'
 ```
 
 ### Cache Management
@@ -306,12 +304,12 @@ The gateway will look for `Cache-Control: no-cache` header and will disable cach
 
 View current cached contents
 ```shell
-curl --location 'http://localhost:8081/admin/cache'
+curl -X GET 'http://localhost:8081/admin/cache'
 ```
 
 Clear cache
 ```shell
-curl --location --request DELETE 'http://localhost:8081/admin/cache'
+curl -X DELETE 'http://localhost:8081/admin/cache'
 ```
 
 ### Publish logs to Elastic Search

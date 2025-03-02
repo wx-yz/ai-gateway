@@ -8,7 +8,7 @@ public type GuardrailConfig record {
 };
 
 // Add guardrails processing function
-public function applyGuardrails(GuardrailConfig guardrails, string text) returns string|error {
+public isolated function applyGuardrails(GuardrailConfig guardrails, string text) returns string|error {
     if (text.length() < guardrails.minLength) {
         return error("Response too short. Minimum length: " + guardrails.minLength.toString());
     }

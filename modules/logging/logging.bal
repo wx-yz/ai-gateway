@@ -19,7 +19,7 @@ type LogEntry record {
     time:Utc timestamp;
 };
 
-public function logEvent(boolean isVerboseLogging, LoggingConfig loggingConfig, string level, string component, string message, map<json> metadata = {}) {
+public isolated function logEvent(boolean isVerboseLogging, LoggingConfig loggingConfig, string level, string component, string message, map<json> metadata = {}) {
     if (!isVerboseLogging && level == "DEBUG") {
         return;
     }
@@ -47,17 +47,17 @@ public function logEvent(boolean isVerboseLogging, LoggingConfig loggingConfig, 
 
     // Publish to configured services
     if (loggingConfig.enableSplunk) {
-        _ = start publishToSplunk(loggingConfig, logEntry);
+        _ = start publishToSplunk(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
     }
     if (loggingConfig.enableDatadog) {
-        _ = start publishToDatadog(loggingConfig, logEntry);
+        _ = start publishToDatadog(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
     }
     if (loggingConfig.enableElasticSearch) {
-        _ = start publishToElasticSearch(loggingConfig, logEntry);
+        _ = start publishToElasticSearch(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
     }
 }
 
-public function publishToSplunk(LoggingConfig loggingConfig, json logEntry) returns error? {
+public isolated function publishToSplunk(LoggingConfig & readonly loggingConfig, json & readonly logEntry) returns error? {
     if (loggingConfig.splunkEndpoint != "") {
         http:Client splunkClient = check new (loggingConfig.splunkEndpoint);
         // Need to handle auth
@@ -68,7 +68,7 @@ public function publishToSplunk(LoggingConfig loggingConfig, json logEntry) retu
     }
 }
 
-public function publishToDatadog(LoggingConfig loggingConfig, json logEntry) returns error? {
+public isolated function publishToDatadog(LoggingConfig & readonly loggingConfig, json & readonly logEntry) returns error? {
     if (loggingConfig.datadogEndpoint != "") {
         http:Client datadogClient = check new (loggingConfig.datadogEndpoint);
         // Need to handle auth
@@ -79,7 +79,7 @@ public function publishToDatadog(LoggingConfig loggingConfig, json logEntry) ret
     }
 }
 
-public function publishToElasticSearch(LoggingConfig loggingConfig, json logEntry) returns error? {
+public isolated function publishToElasticSearch(LoggingConfig & readonly loggingConfig, json & readonly logEntry) returns error? {
     // Check if ElasticSearch is enabled in the config
     if (!loggingConfig.enableElasticSearch) {
         return error("ElasticSearch logging is not enabled in the configuration");
@@ -124,7 +124,7 @@ public function publishToElasticSearch(LoggingConfig loggingConfig, json logEntr
 }
 
 // Helper function to format the payload
-function formatPayload(json logEntry) returns json|error {   
+isolated function formatPayload(json logEntry) returns json|error {   
     // Parse metadata string to JSON
     json metadata = check parseStringAsJson(<string> check logEntry.metadata);
 
@@ -141,6 +141,6 @@ function formatPayload(json logEntry) returns json|error {
 }
 
 // Helper function to parse JSON string
-function parseStringAsJson(string jsonStr) returns json|error {
+isolated function parseStringAsJson(string jsonStr) returns json|error {
     return jsonStr.fromJsonString();
 }

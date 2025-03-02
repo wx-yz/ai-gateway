@@ -1,7 +1,7 @@
 
 
 // Simple HTML template engine
-public function renderTemplate(string template, map<string> values) returns string {
+public isolated function renderTemplate(string template, map<string> values) returns string {
     string result = template;
     
     foreach var [key, value] in values.entries() {

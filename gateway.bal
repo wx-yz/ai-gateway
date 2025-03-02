@@ -27,10 +27,10 @@ type GatewayConfig record {
 configurable GatewayConfig gateway = {};
 
 // Add system prompt storage
-string systemPrompt = "";
+isolated string systemPrompt = "";
 
 // Add guardrails storage
-guardrails:GuardrailConfig guardrails = {
+isolated guardrails:GuardrailConfig guardrails = {
     bannedPhrases: [],
     minLength: 0,
     maxLength: 500000,
@@ -43,7 +43,7 @@ type CacheEntry record {
     int timestamp;
 };
 
-map<CacheEntry> promptCache = {};
+isolated map<CacheEntry> promptCache = {};
 
 // Add cache configuration
 configurable int cacheTTLSeconds = 3600; // Default 1 hour TTL
@@ -53,7 +53,7 @@ configurable int cacheTTLSeconds = 3600; // Default 1 hour TTL
 // that value later using the /admin service. So copying this at init()
 configurable logging:LoggingConfig defaultLoggingConfig = {};
 
-logging:LoggingConfig loggingConfig = {
+isolated logging:LoggingConfig loggingConfig = {
     enableSplunk: false,
     enableDatadog: false,
     enableElasticSearch: false,
@@ -65,7 +65,7 @@ logging:LoggingConfig loggingConfig = {
 };
 
 // Add logging state
-boolean isVerboseLogging = gateway.verboseLogging;
+isolated boolean isVerboseLogging = gateway.verboseLogging;
 
 // Add rate limiting types and storage
 type RateLimitPlan record {|
@@ -80,8 +80,8 @@ type RateLimitState record {|
 |};
 
 // Store rate limit states by IP
-map<RateLimitState> rateLimitStates = {};
-RateLimitPlan? currentRateLimitPlan = ();
+isolated map<RateLimitState> rateLimitStates = {};
+isolated RateLimitPlan? currentRateLimitPlan = ();
 
 // Add service route configuration
 type ServiceRoute record {|
@@ -92,15 +92,19 @@ type ServiceRoute record {|
 |};
 
 // Store configured routes
-map<ServiceRoute> serviceRoutes = {};
+isolated map<ServiceRoute> serviceRoutes = {};
 
 // Add rate limiting function
-function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
-    if currentRateLimitPlan is () {
-        return [true, 0, 0, 0];
+isolated function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
+    lock {
+        if currentRateLimitPlan is () {
+            return [true, 0, 0, 0];
+        }
     }
-
-    RateLimitPlan plan = <RateLimitPlan>currentRateLimitPlan;
+    RateLimitPlan plan;
+    lock {
+        plan = <RateLimitPlan>currentRateLimitPlan.cloneReadOnly();
+    } 
     int currentTime = time:utcNow()[0];
     
     lock {
@@ -135,7 +139,7 @@ function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error 
 }
 
 @grpc:Descriptor {value: AI_GATEWAY_DESC}
-service "AIGateway" on new grpc:Listener(8082) {
+isolated service "AIGateway" on new grpc:Listener(8082) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
     private http:Client? geminiClient = ();
@@ -143,11 +147,11 @@ service "AIGateway" on new grpc:Listener(8082) {
     private http:Client? mistralClient = ();
     private http:Client? cohereClient = ();
 
-    function init() returns error? {
+    isolated function init() returns error? {
         check self.initializeClients();
     }
 
-    remote function ChatCompletion(ChatCompletionRequest request) returns ChatCompletionResponse|error {
+    isolated remote function ChatCompletion(ChatCompletionRequest request) returns ChatCompletionResponse|error {
         // Convert gRPC request to internal LLMRequest format
         llms:LLMRequest llmRequest = {
             messages: from var msg in request.messages
@@ -160,7 +164,7 @@ service "AIGateway" on new grpc:Listener(8082) {
         };
 
         // Reuse existing provider handling logic
-        llms:LLMResponse|error response = self.tryProvider(request.llm_provider, llmRequest);
+        llms:LLMResponse|error response = self.tryProvider(request.llm_provider, llmRequest.cloneReadOnly());
         
         if response is error {
             return response;
@@ -188,80 +192,99 @@ service "AIGateway" on new grpc:Listener(8082) {
             }
         };
     }
-    private function initializeClients() returns error? {
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Initializing AI Gateway gRPC interface");
+    isolated function initializeClients() returns error? {
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+
+        logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Initializing AI Gateway gRPC interface");
         
-        // Read initial logging configuration
-        loggingConfig = defaultLoggingConfig;
-        logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "gRPC:init", "Loaded logging configuration", <map<json>>loggingConfig.toJson());
+        logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Initializing AI Gateway gRPC interface");
+        
+        // Read initial logging configuration            
+        lock { loggingConfig = defaultLoggingConfig; }
+        logging:logEvent(vLog, logConf, "DEBUG", "gRPC:init", "Loaded logging configuration", <map<json>>logConf.toJson());
 
         // Check if at least one provider is configured
         if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "No LLM providers configured");
+            logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "No LLM providers configured");
             return error("At least one LLM provider must be configured");
         }
 
         if openAIConfig?.endpoint != () {
             string endpoint = openAIConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
                 return error("OpenAI endpoint is required");
             } else {
-                self.openaiClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "OpenAI client initialized", {"endpoint": endpoint});
+                lock {
+                    self.openaiClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "OpenAI client initialized", {"endpoint": endpoint});
             }
         }
         if anthropicConfig?.endpoint != () {
             string endpoint = anthropicConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid Anthropic configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid Anthropic configuration", {"error": "Empty endpoint"});
                 return error("Anthropic endpoint is required");
             } else {
-                self.anthropicClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Anthropic client initialized", {"endpoint": endpoint});                
+                lock {
+                    self.anthropicClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Anthropic client initialized", {"endpoint": endpoint});                
             }
         }
         if geminiConfig?.endpoint != () {
             string endpoint = geminiConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid Gemini configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid Gemini configuration", {"error": "Empty endpoint"});
                 return error("Gemini endpoint is required");
             } else {
-                self.geminiClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Gemini client initialized", {"endpoint": endpoint});                
+                lock {
+                    self.geminiClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Gemini client initialized", {"endpoint": endpoint});                
             }
         }
         if ollamaConfig?.endpoint != () {
             string endpoint = ollamaConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid Ollama configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid Ollama configuration", {"error": "Empty endpoint"});
                 return error("Ollama endpoint is required");
             } else {
-                self.ollamaClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Ollama client initialized", {"endpoint": endpoint});
+                lock {
+                    self.ollamaClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Ollama client initialized", {"endpoint": endpoint});
             }
         }
         if mistralConfig?.endpoint != () {
             string endpoint = mistralConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid Mistral configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid Mistral configuration", {"error": "Empty endpoint"});
                 return error("Mistral endpoint is required");
             } else {
-                self.mistralClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Mistral client initialized", {"endpoint": endpoint});
+                lock {
+                    self.mistralClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Mistral client initialized", {"endpoint": endpoint});
             }
         }
         if cohereConfig?.endpoint != () {
             string endpoint = cohereConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:init", "Invalid Cohere configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "gRPC:init", "Invalid Cohere configuration", {"error": "Empty endpoint"});
                 return error("Cohere endpoint is required");
             } else {
-                self.cohereClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "Cohere client initialized", {"endpoint": endpoint});
+                lock {
+                    self.cohereClient = check new (endpoint);
+                }
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "Cohere client initialized", {"endpoint": endpoint});
             }
         }
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:init", "AI Gateway initialization complete", {
+        logging:logEvent(vLog, logConf, "INFO", "gRPC:init", "AI Gateway initialization complete", {
             "providers": [
                 openAIConfig != () ? "openai" : "",
                 anthropicConfig != () ? "anthropic" : "",
@@ -273,27 +296,35 @@ service "AIGateway" on new grpc:Listener(8082) {
         });
     }
 
-    private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
+    private isolated function tryProvider(string provider, llms:LLMRequest & readonly payload) returns llms:LLMResponse|error {
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+
         // Reuse provider handling logic from HTTP service
         string requestId = uuid:createType1AsString();
-        logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "gRPC:provider", "Attempting provider request", {
+        logging:logEvent(vLog, logConf, "DEBUG", "gRPC:provider", "Attempting provider request", {
             requestId: requestId,
             provider: provider,
             prompt: payload.toString()
         });
 
-        // Map of provider to client
-        map<http:Client?> clientMap = {
-            "openai": self.openaiClient,
-            "anthropic": self.anthropicClient,
-            "gemini": self.geminiClient,
-            "ollama": self.ollamaClient,
-            "mistral": self.mistralClient,
-            "cohere": self.cohereClient
-        };
+        map<http:Client?> clientMap;
+        lock {
+            // Map of provider to client
+            clientMap = {
+                "openai": self.openaiClient,
+                "anthropic": self.anthropicClient,
+                "gemini": self.geminiClient,
+                "ollama": self.ollamaClient,
+                "mistral": self.mistralClient,
+                "cohere": self.cohereClient
+            };
+        }
 
         // Map of provider to handler function
-        map<function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
+        map<isolated function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
             "openai": handleOpenAIRequest,
             "anthropic": handleAnthropicRequest,
             "gemini": handleGeminiRequest,
@@ -302,13 +333,13 @@ service "AIGateway" on new grpc:Listener(8082) {
             "cohere": handleCohereRequest
         };
 
-        http:Client? llmClient = clientMap[provider];
-        var handler = handlerMap[provider];
+        final http:Client? llmClient = clientMap[provider];
+        final var handler = handlerMap[provider];
 
         if llmClient is http:Client && handler is function {
             llms:LLMResponse|error response = handler(llmClient, payload);
             if response is llms:LLMResponse {
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "gRPC:provider", "Provider request successful", {
+                logging:logEvent(vLog, logConf, "INFO", "gRPC:provider", "Provider request successful", {
                     requestId: requestId,
                     provider: provider,
                     model: response.model,
@@ -322,6 +353,8 @@ service "AIGateway" on new grpc:Listener(8082) {
                     requestStats.totalRequests += 1;
                     requestStats.successfulRequests += 1;
                     requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                }
+                lock {
                     tokenStats.totalInputTokens += response.usage.prompt_tokens;
                     tokenStats.totalOutputTokens += response.usage.completion_tokens;
                     tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.usage.prompt_tokens;
@@ -331,7 +364,7 @@ service "AIGateway" on new grpc:Listener(8082) {
             return response;
         }
         
-        logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "gRPC:provider", "Provider not configured", {
+        logging:logEvent(vLog, logConf, "ERROR", "gRPC:provider", "Provider not configured", {
             requestId: requestId,
             provider: provider
         });
@@ -339,11 +372,19 @@ service "AIGateway" on new grpc:Listener(8082) {
     }
 }
 
-function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
+    boolean vLog = false;
+    logging:LoggingConfig logConf;
+    string sysPrompt = "";
+    guardrails:GuardrailConfig localGuardrails;
+    lock { vLog = isVerboseLogging; }
+    lock { logConf = loggingConfig.cloneReadOnly(); }
+    lock { sysPrompt = systemPrompt; }
+    lock { localGuardrails = guardrails.cloneReadOnly(); }   
     
     if openAIConfig == () {
-        logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "openai", "OpenAI not configured", {requestId});
+        logging:logEvent(vLog, logConf, "ERROR", "openai", "OpenAI not configured", {requestId});
         return error("OpenAI is not configured");
     }
     [string,string]|error prompts = getPrompts(req);
@@ -359,7 +400,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
         "messages": [
             {
                 "role": "system",
-                "content": reqSystemPrompt + " " + systemPrompt
+                "content": reqSystemPrompt + " " + sysPrompt
             },
             {
                 "role": "user",
@@ -373,7 +414,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
     if openAIConfig?.apiKey != "" {
         map<string|string[]> headers = { "Authorization": "Bearer " + (openAIConfig?.apiKey ?: "") };
         
-        logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "openai", "Sending request to OpenAI", {
+        logging:logEvent(vLog, logConf, "DEBUG", "openai", "Sending request to OpenAI", {
             requestId,
             model: openAIConfig?.model ?: "",
             promptLength: reqUserPrompt.length()
@@ -382,7 +423,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
         http:Response|error response = openaiClient->post("/v1/chat/completions", openAIPayload, headers);
         
         if response is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "openai", "HTTP request failed", {
+            logging:logEvent(vLog, logConf, "ERROR", "openai", "HTTP request failed", {
                 requestId,
                 'error: response.message() + ":" + response.detail().toString()
             });
@@ -391,7 +432,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
 
         json|error responsePayload = response.getJsonPayload();
         if responsePayload is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "openai", "Invalid JSON response", {
+            logging:logEvent(vLog, logConf, "ERROR", "openai", "Invalid JSON response", {
                 requestId,
                 'error: responsePayload.message() + ":" + responsePayload.detail().toString()
             });
@@ -400,7 +441,7 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
 
         llms:OpenAIResponse|error openAIResponse = responsePayload.cloneWithType(llms:OpenAIResponse);
         if openAIResponse is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "openai", "Response type conversion failed", {
+            logging:logEvent(vLog, logConf, "ERROR", "openai", "Response type conversion failed", {
                 requestId,
                 'error: openAIResponse.message() + ":" + openAIResponse.detail().toString()
             });
@@ -408,9 +449,9 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
         }
 
         // Apply guardrails
-        string|error guardedText = guardrails:applyGuardrails(guardrails, openAIResponse.choices[0].message.content);
+        string|error guardedText = guardrails:applyGuardrails(localGuardrails, openAIResponse.choices[0].message.content);
         if guardedText is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "guardrails", "Guardrails check failed", {
+            logging:logEvent(vLog, logConf, "ERROR", "guardrails", "Guardrails check failed", {
                 requestId,
                 'error: guardedText.message() + ":" + guardedText.detail().toString()
             });
@@ -438,12 +479,16 @@ function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) retu
             }
         };  
     } else {
-        logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "openai", "Invalid API key configuration", {requestId});
+        logging:logEvent(vLog, logConf, "ERROR", "openai", "Invalid API key configuration", {requestId});
         return error("OpenAI configuration is invalid");
     }
 }
 
-function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+    guardrails:GuardrailConfig localGuardrails;
+    string sysPrompt = "";
+    lock { localGuardrails = guardrails.cloneReadOnly(); }
+    lock { sysPrompt = systemPrompt; }    
     if ollamaConfig == () {
         return error("Ollama is not configured");
     }
@@ -459,7 +504,7 @@ function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) retu
         "messages": [
             {
                 "role": "system",
-                "content": reqSystemPrompt + " " + systemPrompt
+                "content": reqSystemPrompt + " " + sysPrompt
             },
             {
                 "role": "user",
@@ -475,11 +520,11 @@ function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) retu
         http:Response response = check ollamaClient->post("/api/chat", ollamaPayload, headers);
 
         json responsePayload = check response.getJsonPayload();
-        log:printInfo("Ollama response: " + responsePayload.toString());
+        log:printInfo("########### Ollama response: " + responsePayload.toString());
         llms:OllamaResponse ollamaResponse = check responsePayload.cloneWithType(llms:OllamaResponse);
 
         // Apply guardrails before returning
-        string guardedText = check guardrails:applyGuardrails(guardrails, ollamaResponse.message.content);
+        string guardedText = check guardrails:applyGuardrails(localGuardrails, ollamaResponse.message.content);
 
         return {
             id: uuid:createType1AsString(),
@@ -506,7 +551,11 @@ function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) retu
     }
 }    
 
-function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+    guardrails:GuardrailConfig localGuardrails;
+    string sysPrompt = "";
+    lock { sysPrompt = systemPrompt; }
+    lock { localGuardrails = guardrails.cloneReadOnly(); }
     if anthropicConfig == () {
         return error("Anthropic is not configured");
     }
@@ -522,7 +571,7 @@ function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req
         "messages": [
             {
                 "role": "system",
-                "content": reqSystemPrompt + " " + systemPrompt
+                "content": reqSystemPrompt + " " + sysPrompt
             },
             {
                 "role": "user",
@@ -544,7 +593,7 @@ function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req
         llms:AnthropicResponse anthropicResponse = check responsePayload.cloneWithType(llms:AnthropicResponse);
         
         // Apply guardrails before returning
-        string guardedText = check guardrails:applyGuardrails(guardrails, anthropicResponse.contents.content[0].text);
+        string guardedText = check guardrails:applyGuardrails(localGuardrails, anthropicResponse.contents.content[0].text);
         return {
             id: uuid:createType1AsString(),
             'object: "chat.completion",
@@ -570,7 +619,11 @@ function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req
     }
 }
 
-function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+    guardrails:GuardrailConfig localGuardrails;
+    string sysPrompt = "";
+    lock { sysPrompt = systemPrompt; }
+    lock { localGuardrails = guardrails.cloneReadOnly(); }
     if geminiConfig == () {
         return error("Gemini is not configured");
     }
@@ -586,7 +639,7 @@ function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) retu
         "messages": [
             {
                 "role": "system",
-                "content": reqSystemPrompt + " " + systemPrompt
+                "content": reqSystemPrompt + " " + sysPrompt
             },
             {
                 "role": "user",
@@ -607,7 +660,7 @@ function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) retu
         llms:OpenAIResponse geminiResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
-        string guardedText = check guardrails:applyGuardrails(guardrails, geminiResponse.choices[0].message.content);
+        string guardedText = check guardrails:applyGuardrails(localGuardrails, geminiResponse.choices[0].message.content);
         return {
             id: uuid:createType1AsString(),
             'object: "chat.completion",
@@ -633,7 +686,11 @@ function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) retu
     }
 }
 
-function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+    guardrails:GuardrailConfig localGuardrails;
+    string sysPrompt = "";
+    lock { sysPrompt = systemPrompt; }
+    lock { localGuardrails = guardrails.cloneReadOnly(); }
     if mistralConfig == () {
         return error("Mistral is not configured");
     }
@@ -648,7 +705,7 @@ function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) re
         "messages": [
             {
                 "role": "system",
-                "content": reqSystemPrompt + " " + systemPrompt
+                "content": reqSystemPrompt + " " + sysPrompt
             },
             {
                 "role": "user", 
@@ -668,7 +725,7 @@ function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) re
         llms:OpenAIResponse mistralResponse = check responsePayload.cloneWithType(llms:OpenAIResponse);
 
         // Apply guardrails before returning
-        string guardedText = check guardrails:applyGuardrails(guardrails, mistralResponse.choices[0].message.content);
+        string guardedText = check guardrails:applyGuardrails(localGuardrails, mistralResponse.choices[0].message.content);
 
         return {
             id: uuid:createType1AsString(),
@@ -695,7 +752,11 @@ function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) re
     }
 }
 
-function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+public isolated function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) returns llms:LLMResponse|error {
+    guardrails:GuardrailConfig localGuardrails;
+    string sysPrompt = "";
+    lock { sysPrompt = systemPrompt; }
+    lock { localGuardrails = guardrails.cloneReadOnly(); }
     if cohereConfig == () {
         return error("Cohere is not configured");
     }
@@ -708,8 +769,8 @@ function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) retu
     string reqUserPrompt = prompts[1];
 
     string cohereSystemPromt = "test";
-    if (systemPrompt != "") {
-        cohereSystemPromt = reqUserPrompt + " " + systemPrompt;
+    if (sysPrompt != "") {
+        cohereSystemPromt = reqUserPrompt + " " + sysPrompt;
     }
     json coherePayload = {
         "message": reqUserPrompt,
@@ -740,7 +801,7 @@ function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) retu
         llms:CohereResponse cohereResponse = check responsePayload.cloneWithType(llms:CohereResponse);
         
         // Apply guardrails before returning
-        string guardedText = check guardrails:applyGuardrails(guardrails, cohereResponse.text);
+        string guardedText = check guardrails:applyGuardrails(localGuardrails, cohereResponse.text);
 
         return {
             id: uuid:createType1AsString(),
@@ -786,6 +847,11 @@ service class RequestInterceptor {
         //     return ctx.next();
         // }
 
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }        
+
         // Check Cache-Control header
         string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
         if cacheControl is string && cacheControl == "no-cache" {
@@ -805,15 +871,21 @@ service class RequestInterceptor {
 
         // Generate cache key using SHA1
         string cacheKey = check generateCacheKey(provider, payload);
+
+
+        map<CacheEntry> localPromptCache;
+        lock {
+            localPromptCache = promptCache.cloneReadOnly();
+        }
         
         // Check cache
-        if promptCache.hasKey(cacheKey) {
-            CacheEntry entry = promptCache.get(cacheKey);
+        if localPromptCache.hasKey(cacheKey) {
+            CacheEntry entry = localPromptCache.get(cacheKey);
             int currentTime = time:utcNow()[0];
             
             // Check if cache entry is still valid
             if (currentTime - entry.timestamp < cacheTTLSeconds) {
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "cache", "Cache hit", {
+                logging:logEvent(vLog, logConf, "INFO", "cache", "Cache hit", {
                     cacheKey: cacheKey
                 });
                 
@@ -822,7 +894,9 @@ service class RequestInterceptor {
                     requestStats.totalRequests += 1;
                     requestStats.cacheHits += 1;
                     requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
-                    tokenStats.totalInputTokens += entry.response.usage.prompt_tokens;
+                }
+                lock {
+                   tokenStats.totalInputTokens += entry.response.usage.prompt_tokens;
                     tokenStats.totalOutputTokens += entry.response.usage.completion_tokens;
                     tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + entry.response.usage.prompt_tokens;
                     tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + entry.response.usage.completion_tokens;
@@ -833,11 +907,13 @@ service class RequestInterceptor {
                 cachedResponse.setPayload(entry.response);
                 return  cachedResponse;                
             } else {
-                logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "cache", "Cache entry expired", {
+                logging:logEvent(vLog, logConf, "DEBUG", "cache", "Cache entry expired", {
                     cacheKey: cacheKey,
                     age: currentTime - entry.timestamp
                 });
-                _ = promptCache.remove(cacheKey);
+                lock {
+                    _ = promptCache.remove(cacheKey);
+                }
             }
         }
 
@@ -848,14 +924,16 @@ service class RequestInterceptor {
 }
 
 // Add helper function to generate cache key
-function generateCacheKey(string provider, json payload) returns string|error {
+isolated function generateCacheKey(string provider, json payload) returns string|error {
     // byte[] hash = crypto:hashSha1(provider.toBytes().concat(payload.toString().toBytes()));
     byte[] hash = crypto:hashSha1((provider+payload.toString()).toBytes());
     return hash.toBase16();
 }
 
+isolated var llmHandlers = ();
+
 // Update service to use both interceptors
-service http:InterceptableService / on new http:Listener(8080) {
+isolated service http:InterceptableService / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
     private http:Client? geminiClient = ();
@@ -867,27 +945,32 @@ service http:InterceptableService / on new http:Listener(8080) {
         return [new RequestInterceptor(), new ResponseInterceptor()];
     }
 
-    function init() returns error? {
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "HTTP:init", "Initializing AI Gateway");
+    isolated function init() returns error? {
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+
+        logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "Initializing AI Gateway");
         
         // Read initial logging configuration
-        loggingConfig = defaultLoggingConfig;
-        logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "HTTP:init", "Loaded logging configuration", <map<json>>loggingConfig.toJson());
+        lock { loggingConfig = defaultLoggingConfig; }
+        logging:logEvent(vLog, logConf, "DEBUG", "HTTP:init", "Loaded logging configuration", <map<json>>logConf.toJson());
 
         // Check if at least one provider is configured
         if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "HTTP:init", "No LLM providers configured");
+            logging:logEvent(vLog, logConf, "ERROR", "HTTP:init", "No LLM providers configured");
             return error("At least one LLM provider must be configured");
         }
 
         if openAIConfig?.endpoint != () {
             string endpoint = openAIConfig?.endpoint ?: "";
             if (endpoint == "") {
-                logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "HTTP:init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
+                logging:logEvent(vLog, logConf, "ERROR", "HTTP:init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
                 return error("OpenAI endpoint is required");
             } else {
                 self.openaiClient = check new (endpoint);
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "HTTP:init", "OpenAI client initialized", {"endpoint": endpoint});
+                logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "OpenAI client initialized", {"endpoint": endpoint});
             }
         }
         if anthropicConfig?.endpoint != () {
@@ -911,7 +994,7 @@ service http:InterceptableService / on new http:Listener(8080) {
             if (endpoint == "") {
                 return error("Ollama endpoint is required");
             } else {
-                self.ollamaClient = check new (endpoint);
+                self.ollamaClient = check new (endpoint, { timeout: 60 });
             }
         }
         if mistralConfig?.endpoint != () {
@@ -930,7 +1013,7 @@ service http:InterceptableService / on new http:Listener(8080) {
                 self.cohereClient = check new (endpoint);
             }
         }
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "HTTP:init", "AI Gateway initialization complete", {
+        logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "AI Gateway initialization complete", {
             "providers": [
                 openAIConfig != () ? "openai" : "",
                 anthropicConfig != () ? "anthropic" : "",
@@ -942,12 +1025,17 @@ service http:InterceptableService / on new http:Listener(8080) {
         });
     }
 
-    resource function post v1/chat/completions(
+    isolated resource function post v1/chat/completions(
             @http:Header {name: "x-llm-provider"} string llmProvider,
             @http:Payload llms:LLMRequest payload,
             http:Request request,
             http:RequestContext ctx) returns error|http:Response|llms:LLMResponse {
         string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
+
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
 
         // TODO: Use the client IP address from the request
         string clientIP = "";
@@ -986,30 +1074,45 @@ service http:InterceptableService / on new http:Listener(8080) {
         }
 
         string requestId = uuid:createType1AsString();
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "chat", "Received chat request", {
+        logging:logEvent(vLog, logConf, "INFO", "chat", "Received chat request", {
             requestId: requestId,
             provider: llmProvider,
             prompt: prompts.toString()
         });
 
+        http:Client? oaiClient;
+        http:Client? anthClient;
+        http:Client? gemClient;
+        http:Client? ollClient;
+        http:Client? misClient;
+        http:Client? cohClient;
+        lock {
+            oaiClient = self.openaiClient;
+            anthClient = self.anthropicClient;
+            gemClient = self.geminiClient;
+            ollClient = self.ollamaClient;
+            misClient = self.mistralClient;
+            cohClient = self.cohereClient;
+        }
+
         // Get list of available providers
         string[] availableProviders = [];
-        if self.openaiClient != () {
+        if oaiClient != () {
             availableProviders.push("openai");
         }
-        if self.anthropicClient != () {
+        if anthClient != () {
             availableProviders.push("anthropic");
         }
-        if self.geminiClient != () {
+        if gemClient != () {
             availableProviders.push("gemini");
         }
-        if self.ollamaClient != () {
+        if ollClient != () {
             availableProviders.push("ollama");
         }
-        if self.mistralClient != () {
+        if  misClient != () {
             availableProviders.push("mistral");
         }
-        if self.cohereClient != () {
+        if cohClient != () {
             availableProviders.push("cohere");
         }
 
@@ -1017,10 +1120,10 @@ service http:InterceptableService / on new http:Listener(8080) {
         boolean enableFailover = availableProviders.length() >= 2;
         
         // Try primary provider first
-        llms:LLMResponse|error llmResponse = self.tryProvider(llmProvider, payload);
+        llms:LLMResponse|error llmResponse = self.tryProvider(llmProvider, payload.cloneReadOnly());
         
         if llmResponse is error && enableFailover {
-            logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "failover", "Primary provider failed", {
+            logging:logEvent(vLog, logConf, "WARN", "failover", "Primary provider failed", {
                 requestId: requestId,
                 provider: llmProvider,
                 'error: llmResponse.message() + ":" + llmResponse.detail().toString()
@@ -1029,21 +1132,21 @@ service http:InterceptableService / on new http:Listener(8080) {
             // Try other providers
             foreach string provider in availableProviders {
                 if provider != llmProvider {
-                    logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "failover", "Attempting failover", {
+                    logging:logEvent(vLog, logConf, "INFO", "failover", "Attempting failover", {
                         requestId: requestId,
                         provider: provider
                     });
                     
-                    llms:LLMResponse|error failoverResponse = self.tryProvider(provider, payload);
+                    llms:LLMResponse|error failoverResponse = self.tryProvider(provider, payload.cloneReadOnly());
                     if failoverResponse !is error {
-                        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "failover", "Failover successful", {
+                        logging:logEvent(vLog, logConf, "INFO", "failover", "Failover successful", {
                             requestId: requestId,
                             provider: provider
                         });
                         llmResponse = failoverResponse;
                         break;
                     }
-                    logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "failover", "Failover attempt failed", {
+                    logging:logEvent(vLog, logConf, "WARN", "failover", "Failover attempt failed", {
                         requestId: requestId,
                         provider: provider,
                         'error: failoverResponse.message() + ":" + failoverResponse.detail().toString()
@@ -1053,7 +1156,7 @@ service http:InterceptableService / on new http:Listener(8080) {
         }
 
         if llmResponse is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "chat", "All providers failed", {
+            logging:logEvent(vLog, logConf, "ERROR", "chat", "All providers failed", {
                 requestId: requestId,
                 'error: llmResponse.message() + ":" + llmResponse.detail().toString()
             });
@@ -1062,29 +1165,36 @@ service http:InterceptableService / on new http:Listener(8080) {
 
         // Cache successful response using key from context
         string cacheKey = check generateCacheKey(llmProvider, payload.toJson());
-        if cacheKey is string {
-            promptCache[cacheKey] = {
-                response: llmResponse,
-                timestamp: time:utcNow()[0]
-            };
-            logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "cache", "Cached response", {
+        if cacheKey != "" {
+            lock {
+                promptCache[cacheKey] = {
+                    response: llmResponse.cloneReadOnly(),
+                    timestamp: time:utcNow()[0]
+                };
+            }
+
+            logging:logEvent(vLog, logConf, "DEBUG", "cache", "Cached response", {
                 cacheKey: cacheKey
             });
         }
 
         // Add rate limit headers to response context
-        if currentRateLimitPlan != () {
+
+        RateLimitPlan? rLimitP;
+        lock {
+            rLimitP = currentRateLimitPlan.cloneReadOnly();
+        }
+        if rLimitP != () {
             response.setHeader("RateLimit-Limit", rateLimit.toString());
             response.setHeader("RateLimit-Remaining", remaining.toString());
             response.setHeader("RateLimit-Reset", reset.toString());
         }
         response.setPayload(llmResponse);
-
         return response;
     }
 
         // This function handles all requests to the /services/{serviceName} path
-    resource function 'default [string serviceName]/[string... path](
+    isolated resource function 'default [string serviceName]/[string... path](
         http:Request req, 
         http:RequestContext ctx) returns http:Response|error {
         
@@ -1092,9 +1202,19 @@ service http:InterceptableService / on new http:Listener(8080) {
 
         string routeName = path[0];
 
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+
+        map<ServiceRoute> localRoutes;
+        lock {
+            localRoutes = serviceRoutes.cloneReadOnly();
+        }
+
         // Check if the service exists
-        if !serviceRoutes.hasKey(routeName) {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Service not found", {
+        if !localRoutes.hasKey(routeName) {
+            logging:logEvent(vLog, logConf, "ERROR", "apigateway", "Service not found", {
                 requestId: requestId,
                 serviceName: routeName
             });
@@ -1104,18 +1224,22 @@ service http:InterceptableService / on new http:Listener(8080) {
             return res;
         }
         
-        ServiceRoute|() route = serviceRoutes[routeName] ?: ();
+        ServiceRoute|() route = localRoutes[routeName] ?: ();
         if route is () {
             // no route, log and return
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Service not found", {
+            logging:logEvent(vLog, logConf, "ERROR", "apigateway", "Service not found", {
                 requestId: requestId,
                 serviceName: routeName
             });
             return error("Service not found");
         }
-        
+
+        RateLimitPlan? rLimitP;
+        lock {
+            rLimitP = currentRateLimitPlan.cloneReadOnly();
+        }        
         // Check rate limits if enabled for this route
-        if route.enableRateLimit && currentRateLimitPlan != () {
+        if route.enableRateLimit && rLimitP != () {
             string|http:HeaderNotFoundError clientIP = req.getHeader("X-Forwarded-For");
             if clientIP is string {
             // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
@@ -1126,7 +1250,7 @@ service http:InterceptableService / on new http:Listener(8080) {
                 int reset = rateLimitRespones[3];
                 
                 if !allowed {
-                    logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "apigateway", "Rate limit exceeded", {
+                    logging:logEvent(vLog, logConf, "WARN", "apigateway", "Rate limit exceeded", {
                         requestId: requestId,
                         serviceName: routeName,
                         clientIP: clientIP
@@ -1141,7 +1265,7 @@ service http:InterceptableService / on new http:Listener(8080) {
                 }
             } else {
                 // log
-                logging:logEvent(isVerboseLogging, loggingConfig, "WARN", "apigateway", "X-Forwarded-For header not found", {
+                logging:logEvent(vLog, logConf, "WARN", "apigateway", "X-Forwarded-For header not found", {
                     requestId: requestId,
                     serviceName: routeName
                 });
@@ -1191,7 +1315,7 @@ service http:InterceptableService / on new http:Listener(8080) {
         // Create client for backend service
         http:Client|error backendClient = new (route.endpoint);
         if backendClient is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Failed to create backend client", {
+            logging:logEvent(vLog, logConf, "ERROR", "apigateway", "Failed to create backend client", {
                 requestId: requestId,
                 serviceName: routeName,
                 endpoint: route.endpoint,
@@ -1208,7 +1332,7 @@ service http:InterceptableService / on new http:Listener(8080) {
             backendPath = backendPath + "?" + req.getQueryParams().toString();
         }
         
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "apigateway", "Forwarding request", {
+        logging:logEvent(vLog, logConf, "INFO", "apigateway", "Forwarding request", {
             requestId: requestId,
             serviceName: routeName,
             method: req.method,
@@ -1241,7 +1365,7 @@ service http:InterceptableService / on new http:Listener(8080) {
         }
         
         if response is error {
-            logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "apigateway", "Backend request failed", {
+            logging:logEvent(vLog, logConf, "ERROR", "apigateway", "Backend request failed", {
                 requestId: requestId,
                 serviceName: routeName,
                 'error: response.message()
@@ -1258,27 +1382,38 @@ service http:InterceptableService / on new http:Listener(8080) {
         return response;
     }
 
+    // isolated var llmHandelers;
+
     // Helper function to try a specific provider
-    private function tryProvider(string provider, llms:LLMRequest payload) returns llms:LLMResponse|error {
+    private isolated function tryProvider(string provider, llms:LLMRequest & readonly payload) returns llms:LLMResponse|error {
         string requestId = uuid:createType1AsString();
-        logging:logEvent(isVerboseLogging, loggingConfig, "DEBUG", "provider", "Attempting provider request", {
+        boolean vLog = false;
+        logging:LoggingConfig logConf;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+
+        logging:logEvent(vLog, logConf, "DEBUG", "provider", "Attempting provider request", {
             requestId: requestId,
             provider: provider,
             prompt: payload.toString()
         });
 
         // Map of provider to client
-        map<http:Client?> clientMap = {
-            "openai": self.openaiClient,
-            "anthropic": self.anthropicClient,
-            "gemini": self.geminiClient,
-            "ollama": self.ollamaClient,
-            "mistral": self.mistralClient,
-            "cohere": self.cohereClient
-        };
+        map<http:Client?> clientMap;
+        lock {
+            clientMap = {
+                "openai": self.openaiClient,
+                "anthropic": self.anthropicClient,
+                "gemini": self.geminiClient,
+                "ollama": self.ollamaClient,
+                "mistral": self.mistralClient,
+                "cohere": self.cohereClient
+            };
+        }
+
 
         // Map of provider to handler function
-        map<function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
+        final map<isolated function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
             "openai": handleOpenAIRequest,
             "anthropic": handleAnthropicRequest,
             "gemini": handleGeminiRequest,
@@ -1287,13 +1422,13 @@ service http:InterceptableService / on new http:Listener(8080) {
             "cohere": handleCohereRequest
         };
 
-        http:Client? llmClient = clientMap[provider];
-        var handler = handlerMap[provider];
+        final http:Client? llmClient = clientMap[provider];
+        final var handler = handlerMap[provider];
 
         if llmClient is http:Client && handler is function {
             llms:LLMResponse|error response = handler(llmClient, payload);
             if response is llms:LLMResponse {
-                logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "provider", "Provider request successful", {
+                logging:logEvent(vLog, logConf, "INFO", "provider", "Provider request successful", {
                     requestId: requestId,
                     provider: provider,
                     model: response.model,
@@ -1307,6 +1442,8 @@ service http:InterceptableService / on new http:Listener(8080) {
                     requestStats.totalRequests += 1;
                     requestStats.successfulRequests += 1;
                     requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+                }
+                lock {
                     tokenStats.totalInputTokens += response.usage.prompt_tokens;
                     tokenStats.totalOutputTokens += response.usage.completion_tokens;
                     tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.usage.prompt_tokens;
@@ -1316,7 +1453,7 @@ service http:InterceptableService / on new http:Listener(8080) {
             return response;
         }
         
-        logging:logEvent(isVerboseLogging, loggingConfig, "ERROR", "provider", "Provider not configured", {
+        logging:logEvent(vLog, logConf, "ERROR", "provider", "Provider not configured", {
             requestId: requestId,
             provider: provider
         });
@@ -1324,7 +1461,7 @@ service http:InterceptableService / on new http:Listener(8080) {
     }
 }
 
-function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
+isolated function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
         string systemPrompt = "";
         string userPrompt = "";
         llms:LLMRequestMessage[] messages = llmRequest.messages;
@@ -1357,7 +1494,7 @@ function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
     }
 
 // Analytics storage
-analytics:RequestStats requestStats = {
+isolated analytics:RequestStats requestStats = {
     totalRequests: 0,
     successfulRequests: 0,
     failedRequests: 0,
@@ -1367,77 +1504,94 @@ analytics:RequestStats requestStats = {
     cacheMisses: 0
 };
 
-analytics:TokenStats tokenStats = {
+isolated analytics:TokenStats tokenStats = {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     inputTokensByProvider: {},
     outputTokensByProvider: {}
 };
 
-analytics:ErrorStats errorStats = {
+isolated analytics:ErrorStats errorStats = {
     totalErrors: 0,
     errorsByType: {},
     recentErrors: []
 };
 
 // Add new admin service
-service http:InterceptableService /admin on new http:Listener(8081) {
+isolated service http:InterceptableService /admin on new http:Listener(8081) {
     // Template HTML for analytics
-    string statsTemplate = "";
+    private string statsTemplate = "";
 
     public function createInterceptors() returns ResponseInterceptor {
         return new ResponseInterceptor();
     }
 
-    function init() returns error? {
+    isolated function init() returns error? {
         self.statsTemplate = check io:fileReadString("resources/stats.html");
     }
-    resource function post systemprompt(@http:Payload llms:SystemPromptConfig config) returns string|error {
-        systemPrompt = config.prompt;
+    isolated resource function post systemprompt(@http:Payload llms:SystemPromptConfig config) returns string|error {
+        lock { systemPrompt = config.prompt; }
         return "System prompt updated successfully";
     }
 
     resource function get systemprompt() returns llms:SystemPromptConfig {
-        return {
-            prompt: systemPrompt
-        };
+        lock { 
+            return {
+                prompt: systemPrompt
+            };
+        }
     }
 
     // Add guardrails endpoints
     resource function post guardrails(@http:Payload guardrails:GuardrailConfig config) returns string|error {
-        guardrails = config;
+        lock { 
+            guardrails = config.cloneReadOnly(); 
+        }
         return "Guardrails updated successfully";
     }
 
     resource function get guardrails() returns guardrails:GuardrailConfig {
-        return guardrails;
+        lock {
+            return guardrails.cloneReadOnly();
+        }        
     }
 
     // Add cache management endpoints
     resource function delete cache() returns string {
-        promptCache = {};
+        lock {
+            promptCache = {};
+        }
         return "Cache cleared successfully";
     }
 
     resource function get cache() returns map<CacheEntry> {
-        return promptCache;
+        lock {
+            return promptCache.cloneReadOnly();
+        }        
     }
 
     resource function get dashboard() returns http:Response|error {
-        string html = analytics:renderTemplate(self.statsTemplate, {});
+        string html;
+        lock {
+            html = analytics:renderTemplate(self.statsTemplate, {});
+        } 
         http:Response response = new;
         response.setHeader("Content-Type", "text/html");
         response.setPayload(html);
         return response;
     }
     // Add logging configuration endpoint
-    resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns string|error {
-        loggingConfig = <logging:LoggingConfig & readonly>logConfig;
+    isolated resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns string|error {
+        lock {
+            loggingConfig = <logging:LoggingConfig & readonly>logConfig;
+        }
         return "Logging configuration updated successfully";
     }
 
-    resource function get logging() returns logging:LoggingConfig {
-        return loggingConfig;
+    isolated resource function get logging() returns logging:LoggingConfig {
+        lock {
+            return loggingConfig.cloneReadOnly();
+        }        
     }
 
     // Add verbose logging toggle
@@ -1452,22 +1606,29 @@ service http:InterceptableService /admin on new http:Listener(8081) {
     // }
 
     // Get current rate limit plan
-    resource function get ratelimit() returns json? {
-        if currentRateLimitPlan == () {
-            return {};
+    isolated resource function get ratelimit() returns json? {
+        lock {
+            if currentRateLimitPlan == () {
+                return {};
+            }
+            return currentRateLimitPlan.cloneReadOnly();
         }
-        return currentRateLimitPlan;
     }
 
     // Update rate limit plan
-    resource function post ratelimit(@http:Payload RateLimitPlan payload) returns string|error {
+    isolated resource function post ratelimit(@http:Payload RateLimitPlan payload) returns string|error {
+        lock { 
+            currentRateLimitPlan = payload.cloneReadOnly(); 
+        }
+        // Clear existing states when plan changes
         lock {
-            currentRateLimitPlan = payload;
-            // Clear existing states when plan changes
             rateLimitStates = {};
         }
-        
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Rate limit plan updated", {
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+        logging:logEvent(vLog.cloneReadOnly(), logConf.cloneReadOnly(), "INFO", "admin", "Rate limit plan updated", {
             plan: payload.toString()
         });
         
@@ -1475,60 +1636,88 @@ service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Remove rate limiting
-    resource function delete ratelimit() returns string {
+    isolated resource function delete ratelimit() returns string {
         lock {
-            currentRateLimitPlan = ();
+            currentRateLimitPlan = (); 
+        }
+        lock {
             rateLimitStates = {};
         }
-        
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Rate limiting disabled");
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }        
+        logging:logEvent(vLog, logConf, "INFO", "admin", "Rate limiting disabled");
         
         return "Rate limiting disabled";
     }
 
     // Get current rate limit states (for debugging)
-    resource function get ratelimit/states() returns map<RateLimitState> {
-        return rateLimitStates;
+    isolated resource function get ratelimit/states() returns map<RateLimitState> {
+        lock {
+            return rateLimitStates.cloneReadOnly();
+        }
     }
 
     // Add new JSON stats endpoint
-    resource function get stats() returns json {
+    isolated resource function get stats() returns json {
         string[] requestLabels = [];
         int[] requestData = [];
         int i = 0;
-        foreach string ikey in requestStats.requestsByProvider.keys() {
-            requestLabels[i] = ikey;
-            requestData[i] = requestStats.requestsByProvider[ikey] ?: 0;
-            i = i + 1;
+        lock {
+            foreach string ikey in requestStats.requestsByProvider.keys() {
+                requestLabels[i] = ikey;
+                requestData[i] = requestStats.requestsByProvider[ikey] ?: 0;
+                i = i + 1;
+            }
         }
+
         string[] inputTokenLabels = [];
         int[] inputTokenData = [];
         i = 0;
-        foreach string ikey in tokenStats.inputTokensByProvider.keys() {
-            inputTokenLabels[i] = ikey;
-            inputTokenData[i] = tokenStats.inputTokensByProvider[ikey] ?: 0;
-            i = i + 1;
+        lock {
+            foreach string ikey in tokenStats.inputTokensByProvider.keys() {
+                inputTokenLabels[i] = ikey;
+                inputTokenData[i] = tokenStats.inputTokensByProvider[ikey] ?: 0;
+                i = i + 1;
+            }
         }
         int[] outputTokenData = [];
         i = 0;
-        foreach string ikey in tokenStats.outputTokensByProvider.keys() {
-            outputTokenData[i] = tokenStats.outputTokensByProvider[ikey] ?: 0;
-            i = i + 1;
-        }        
-
+        lock {
+            foreach string ikey in tokenStats.outputTokensByProvider.keys() {
+                outputTokenData[i] = tokenStats.outputTokensByProvider[ikey] ?: 0;
+                i = i + 1;
+            } 
+        }
+       
         // Calculate cache hit rate
         float cacheHitRate = 0.0;
-        if (requestStats.totalRequests > 0) {
-            cacheHitRate = <float>requestStats.cacheHits / <float>requestStats.totalRequests * 100.0;
+        lock {
+            if (requestStats.totalRequests > 0) {
+                cacheHitRate = <float>requestStats.cacheHits / <float>requestStats.totalRequests * 100.0;
+            }
         }
 
+        analytics:RequestStats rStats;
+        analytics:ErrorStats eStats;
+        analytics:TokenStats tStats;
+        lock {
+            rStats = requestStats.cloneReadOnly();
+        }
+        lock {
+            eStats = errorStats.cloneReadOnly();
+        }
+        lock {
+            tStats = tokenStats.cloneReadOnly();
+        }
         return {
             overview: {
-                totalRequests: requestStats.totalRequests,
-                successfulRequests: requestStats.successfulRequests,
-                failedRequests: requestStats.failedRequests,
+                totalRequests: rStats.totalRequests,
+                successfulRequests: rStats.successfulRequests,
+                failedRequests: rStats.failedRequests,
                 cacheHitRate: cacheHitRate,
-                totalErrors: errorStats.totalErrors
+                totalErrors: eStats.totalErrors
             },
             requests: {
                 labels: requestLabels,
@@ -1538,36 +1727,40 @@ service http:InterceptableService /admin on new http:Listener(8081) {
                 labels: inputTokenLabels,
                 inputData: inputTokenData,
                 outputData: outputTokenData,
-                totalInput: tokenStats.totalInputTokens,
-                totalOutput: tokenStats.totalOutputTokens
+                totalInput: tStats.totalInputTokens,
+                totalOutput: tStats.totalOutputTokens
             },
             errors: {
-                recent: errorStats.recentErrors,
-                byType: errorStats.errorsByType
+                recent: eStats.recentErrors,
+                byType: eStats.errorsByType
             },
             cache: {
-                hits: requestStats.cacheHits,
-                misses: requestStats.cacheMisses,
-                size: promptCache.length()
+                hits: rStats.cacheHits,
+                misses: rStats.cacheMisses,
+                size: rStats.length()
             }
         };
     }
 
     // Get all configured routes
-    resource function get routes() returns map<ServiceRoute>|error {
-        return serviceRoutes;
+    isolated resource function get routes() returns map<ServiceRoute>|error {
+        lock {
+            return serviceRoutes.cloneReadOnly();
+        }        
     }
     
     // Get a specific route
-    resource function get routes/[string name]() returns ServiceRoute|error? {
-        if serviceRoutes.hasKey(name) {
-            return serviceRoutes[name];
+    isolated resource function get routes/[string name]() returns ServiceRoute|error? {
+        lock {
+            if serviceRoutes.hasKey(name) {
+                return serviceRoutes[name].cloneReadOnly();
+            }
         }
         return error("Service route not found: " + name);
     }
     
     // Create or update a route
-    resource function post routes(@http:Payload ServiceRoute payload) returns string|error {
+    isolated resource function post routes(@http:Payload ServiceRoute payload) returns string|error {
         if payload.name == "" {
             return error("Service name is required");
         }
@@ -1575,10 +1768,16 @@ service http:InterceptableService /admin on new http:Listener(8081) {
         if payload.endpoint == "" {
             return error("Service endpoint is required");
         }
+        lock {
+            serviceRoutes[payload.name] = payload.cloneReadOnly();
+        }
+
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }         
         
-        serviceRoutes[payload.name] = payload;
-        
-        logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Service route configured", {
+        logging:logEvent(vLog, logConf, "INFO", "admin", "Service route configured", {
             name: payload.name,
             endpoint: payload.endpoint,
             enableCache: payload.enableCache,
@@ -1589,17 +1788,21 @@ service http:InterceptableService /admin on new http:Listener(8081) {
     }
     
     // Delete a route
-    resource function delete routes/[string name]() returns string|error {
-        if serviceRoutes.hasKey(name) {
-            _ = serviceRoutes.remove(name);
-            
-            logging:logEvent(isVerboseLogging, loggingConfig, "INFO", "admin", "Service route deleted", {
-                name: name
-            });
-            
-            return "Service route deleted successfully: " + name;
-        }
-        
+    isolated resource function delete routes/[string name]() returns string|error {
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }          
+
+        lock {
+            if serviceRoutes.hasKey(name) {
+                _ = serviceRoutes.remove(name);                
+                logging:logEvent(vLog, logConf.cloneReadOnly(), "INFO", "admin", "Service route deleted", {
+                    name: name
+                });                
+                return "Service route deleted successfully: " + name;
+            }
+        }        
         return error("Service route not found: " + name);
     }    
 }
