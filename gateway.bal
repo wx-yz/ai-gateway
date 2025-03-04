@@ -8,7 +8,6 @@ import ballerina/uuid;
 import ballerina/grpc;
 import ballerina/crypto;
 import ai_gateway.guardrails;
-import ballerina/log;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -118,7 +117,17 @@ isolated analytics:ErrorStats errorStats = {
     recentErrors: []
 };
 
-// Add rate limiting function
+# Checks if a client has exceeded their rate limit according to the current rate limit plan
+# Note: If no rate limit plan is configured, all requests are allowed
+# 
+# + clientIP - The IP address of the client making the request
+# + return - [boolean, int, int, int] - A tuple containing:
+#            [0] - Whether the request is allowed (true) or rejected due to rate limiting (false)
+#            [1] - The maximum number of requests allowed in the current window
+#            [2] - The number of remaining requests allowed in the current window
+#            [3] - The number of seconds until the current rate limit window resets
+#            error - If rate limit checking fails for any reason
+
 isolated function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
     lock {
         if currentRateLimitPlan is () {
@@ -159,6 +168,11 @@ isolated function checkRateLimit(string clientIP) returns [boolean, int, int, in
     }
 }
 
+# AIGateway gRPC service
+# Provides gRPC API for interacting with the AI Gateway's LLM providers
+# Exposes endpoints for chat completion and other LLM operations
+# Uses the same underlying provider handling logic as the HTTP API
+# Maintains metrics and logging consistent with the HTTP interface
 @grpc:Descriptor {value: AI_GATEWAY_DESC}
 isolated service "AIGateway" on new grpc:Listener(8082) {
     private http:Client? openaiClient = ();
@@ -171,6 +185,13 @@ isolated service "AIGateway" on new grpc:Listener(8082) {
     isolated function init() returns error? {
         check self.initializeClients();
     }
+
+    # ChatCompletion handles gRPC requests for LLM completions
+    # Converts gRPC-specific request format to internal LLMRequest
+    # Uses the same underlying provider routing and failover logic as the HTTP API
+    # + request - The ChatCompletionRequest from the gRPC client containing messages, temperature, etc.
+    # + return - ChatCompletionResponse - The formatted response with completion text and metadata
+    #            error - If any provider errors occur or no providers are available
 
     isolated remote function ChatCompletion(ChatCompletionRequest request) returns ChatCompletionResponse|error {
         // Convert gRPC request to internal LLMRequest format
@@ -213,6 +234,15 @@ isolated service "AIGateway" on new grpc:Listener(8082) {
             }
         };
     }
+
+    # Initialize LLM provider clients for the gRPC service
+    # Sets up HTTP clients for each configured LLM provider (OpenAI, Anthropic, etc.)
+    # Validates endpoint configurations and API keys before establishing connections
+    # Logs initialization status for each provider with endpoint information
+    # Returns error if no providers are configured or if any required configuration is missing
+    # This function is called during service initialization to prepare all provider connections
+    # 
+    # + return - error - If any provider configuration is invalid or missing
     isolated function initializeClients() returns error? {
         boolean vLog = false;
         logging:LoggingConfig logConf;
@@ -317,6 +347,19 @@ isolated service "AIGateway" on new grpc:Listener(8082) {
         });
     }
 
+    # Attempts to route a request to the specified LLM provider
+    # Handles provider selection, request processing, error handling, and metrics collection
+    # Parameters:
+    # Notes:
+    #   - Updates request and token statistics on success
+    #   - Records detailed error information on failure
+    #   - Logs all request attempts with correlation IDs for tracing
+    #   - Uses appropriate handler function based on provider type
+    # 
+    # + provider - The name of the LLM provider to use (e.g., "openai", "anthropic")
+    # + payload - The LLM request payload containing messages and parameters
+    # + return - llms:LLMResponse - A successful response from the LLM provider
+    #            error - If the provider request fails, not configured, or encounters other issues
     private isolated function tryProvider(string provider, llms:LLMRequest & readonly payload) returns llms:LLMResponse|error {
         string requestId = uuid:createType1AsString();
         boolean vLog = false;
@@ -427,19 +470,23 @@ isolated service "AIGateway" on new grpc:Listener(8082) {
                 errorStats.recentErrors = errorStats.recentErrors.slice(1);
             }
             errorStats.recentErrors.push(newError.toString());
-
         }
         lock {
-
             // Update request stats
             requestStats.totalRequests += 1;
             requestStats.failedRequests += 1;
         }
-
         return error(errorMessage);
     }
 }
 
+# Handles a request to the OpenAI API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + openaiClient - HTTP client for communicating with OpenAI API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 public isolated function handleOpenAIRequest(http:Client openaiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
     boolean vLog = false;
@@ -568,6 +615,14 @@ public isolated function handleOpenAIRequest(http:Client openaiClient, llms:LLMR
         return error("OpenAI configuration is invalid");
     }
 }
+
+# Handles a request to the Ollama API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + ollamaClient - HTTP client for communicating with Ollama API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 
 public isolated function handleOllamaRequest(http:Client ollamaClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
@@ -709,6 +764,14 @@ public isolated function handleOllamaRequest(http:Client ollamaClient, llms:LLMR
         return error("Ollama configuration is invalid");
     }
 }
+
+# Handles a request to the Anthropic API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + anthropicClient - HTTP client for communicating with Anthropic API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 
 public isolated function handleAnthropicRequest(http:Client anthropicClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
@@ -860,6 +923,13 @@ public isolated function handleAnthropicRequest(http:Client anthropicClient, llm
     }
 }
 
+# Handles a request to the Gemini API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + geminiClient - HTTP client for communicating with Gemini API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 public isolated function handleGeminiRequest(http:Client geminiClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
     boolean vLog = false;
@@ -1002,6 +1072,13 @@ public isolated function handleGeminiRequest(http:Client geminiClient, llms:LLMR
     }
 }
 
+# Handles a request to the Mistral API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + mistralClient - HTTP client for communicating with Mistral API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 public isolated function handleMistralRequest(http:Client mistralClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
     boolean vLog = false;
@@ -1146,6 +1223,13 @@ public isolated function handleMistralRequest(http:Client mistralClient, llms:LL
     }
 }
 
+# Handles a request to the Cohere API for chat completion
+# Processes the request, applies system prompts, and handles error conditions
+# 
+# + cohereClient - HTTP client for communicating with Cohere API
+# + req - LLM request containing messages, parameters and completion settings
+# + return - llms:LLMResponse - A formatted response containing completion text and metadata
+#            error - If the API request fails, returns invalid data, or cannot be processed
 public isolated function handleCohereRequest(http:Client cohereClient, llms:LLMRequest req) returns llms:LLMResponse|error {
     string requestId = uuid:createType1AsString();
     boolean vLog = false;
@@ -1308,16 +1392,28 @@ service class ResponseInterceptor {
     }
 }
 
-// Add request interceptor for cache handling
+# HTTP request interceptor for the AI Gateway
+# Handles request preprocessing including cache lookups and generation of cache keys
+# 
+# - Intercepts incoming HTTP requests before they reach handler functions
+# - Checks if responses are available in cache to avoid unnecessary API calls
+# - Generates cache keys for requests based on provider and payload hash
+# - Updates cache statistics for hits and misses
+# - Stores cache keys in the request context for later use by handlers
+# - Respects Cache-Control headers for cache bypassing
 service class RequestInterceptor {
     *http:RequestInterceptor;
 
+    # Intercepts incoming HTTP requests to check cache before forwarding to handlers
+    # Checks for cached responses based on provider and payload hash
+    # 
+    # + ctx - The request context containing metadata and routing information
+    # + req - The original HTTP request from the client
+    # + path - The path segments of the request URL
+    # + return - http:NextService - Forwards the request to the next service in the chain
+    #            http:Response - Returns a cached response if available
+    #            error - If any processing errors occur during interception
     resource function 'default[string... path](http:RequestContext ctx, http:Request req) returns http:NextService|http:Response|error? {
-        // Only intercept POST requests to chat completions endpoint
-        // if req.method != "POST" || !req.rawPath.startsWith("/v1/chat/completions") {
-        //     return ctx.next();
-        // }
-
         boolean vLog = false;
         logging:LoggingConfig logConf;
         lock { vLog = isVerboseLogging; }
@@ -1407,7 +1503,13 @@ service class RequestInterceptor {
     }
 }
 
-// Add helper function to generate cache key
+# Generates a SHA-1 hash-based cache key for LLM API requests
+# Creates a unique identifier for each request to enable caching of responses
+# 
+# + provider - The name of the LLM provider handling the request
+# + payload - The JSON request payload containing messages and parameters
+# + return - string - A hex-encoded SHA-1 hash string to use as cache key
+#            error - If hash generation fails for any reason
 isolated function generateCacheKey(string provider, json payload) returns string|error {
     // byte[] hash = crypto:hashSha1(provider.toBytes().concat(payload.toString().toBytes()));
     byte[] hash = crypto:hashSha1((provider+payload.toString()).toBytes());
@@ -1425,48 +1527,59 @@ type HttpResponseError record {
     string method;
 };
 
+
+# Updates error statistics for failed LLM provider API requests
+# Records error details by provider, type, and message for monitoring and reporting
+# 
+# + provider - The name of the LLM provider that generated the error
+# + llmResponse - The error response returned by the provider API call
+# + requestId - The unique identifier for the original request
 isolated function updateErrorStats(string provider, error llmResponse, string requestId) {
-            // Ensure we've updated the error stats for the final error
-            // string errorType = "unknown";
-            // string errorMessage = llmResponse.message();
+    HttpResponseError|http:ClientConnectorError|error httpError = llmResponse.ensureType(HttpResponseError);
+    string errorType;
+    string errorMessage;
 
-            HttpResponseError|http:ClientConnectorError|error httpError = llmResponse.ensureType(HttpResponseError);
-            string errorType;
-            string errorMessage;
+    if httpError is HttpResponseError {
+        errorType = httpError.status;
+        errorMessage = httpError.message;
+    } else if httpError is http:ClientConnectorError {
+        errorType = httpError.message();
+        errorMessage = httpError.detail().toString();
+    } else {
+        errorType = "unknown";
+        errorMessage = llmResponse.message();
+    }
 
-            if httpError is HttpResponseError {
-                errorType = httpError.status;
-                errorMessage = httpError.message;
-            } else if httpError is http:ClientConnectorError {
-                errorType = httpError.message();
-                errorMessage = httpError.detail().toString();
-            } else {
-                errorType = "unknown";
-                errorMessage = llmResponse.message();
-            }
+    // Final error stats update for the client-facing error
+    lock {
+        // Update errors by type (grouped by status code)
+        errorStats.errorsByType[errorType] = (errorStats.errorsByType[errorType] ?: 0) + 1;
 
-            // Final error stats update for the client-facing error
-            lock {
-                // Update errors by type (grouped by status code)
-                errorStats.errorsByType[errorType] = (errorStats.errorsByType[errorType] ?: 0) + 1;
+        // Add to recent errors as the final client-facing error
+        analytics:ErrorEntry newError = {
+            timestamp: time:utcNow()[0],
+            provider: "all-providers", // Indicate all providers failed
+            message: errorMessage,
+            'type: errorType,
+            requestId: requestId
+        };
 
-                // Add to recent errors as the final client-facing error
-                analytics:ErrorEntry newError = {
-                    timestamp: time:utcNow()[0],
-                    provider: "all-providers", // Indicate all providers failed
-                    message: errorMessage,
-                    'type: errorType,
-                    requestId: requestId
-                };
-
-                if errorStats.recentErrors.length() >= 10 {
-                    errorStats.recentErrors = errorStats.recentErrors.slice(1);
-                }
-                errorStats.recentErrors.push(newError.toString());
-            }
+        if errorStats.recentErrors.length() >= 10 {
+            errorStats.recentErrors = errorStats.recentErrors.slice(1);
+        }
+        errorStats.recentErrors.push(newError.toString());
+    }
 }
 
-// Update service to use both interceptors
+# Main AI Gateway HTTP service
+# Handles routing and processing of LLM API requests with intelligent provider selection
+# 
+# - Provides an OpenAI-compatible API endpoint for chat completions
+# - Supports multiple LLM providers with automatic failover
+# - Implements request caching to improve performance and reduce costs
+# - Enforces rate limits and guardrails on API usage
+# - Collects detailed metrics on usage, tokens, and errors
+# - Provides service discovery and routing for microservices
 isolated service http:InterceptableService / on new http:Listener(8080) {
     private http:Client? openaiClient = ();
     private http:Client? anthropicClient = ();
@@ -1479,86 +1592,76 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
         return [new RequestInterceptor(), new ResponseInterceptor()];
     }
 
+    # Initializes the main HTTP service for the AI Gateway
+    # Sets up connections to LLM providers, loads configurations, and validates the initial setup
+    # Note: This function is called automatically when the service starts up
+    # 
+    # + return - error - If initialization fails due to missing or invalid configuration
+    #            () - If initialization is successful and at least one provider is configured
     isolated function init() returns error? {
-        boolean vLog = false;
-        logging:LoggingConfig logConf;
-        lock { vLog = isVerboseLogging; }
-        lock { logConf = loggingConfig.cloneReadOnly(); }
-
+        [boolean, logging:LoggingConfig] [vLog, logConf] = getLoggingConfig();
         logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "Initializing AI Gateway");
-
+        
         // Read initial logging configuration
         lock { loggingConfig = defaultLoggingConfig; }
         logging:logEvent(vLog, logConf, "DEBUG", "HTTP:init", "Loaded logging configuration", <map<json>>logConf.toJson());
-
+        
+        // Initialize providers using lock statement
+        http:Client? openai = initializeProvider("openai", openAIConfig?.endpoint)[0];
+        http:Client? anthropic = initializeProvider("anthropic", anthropicConfig?.endpoint)[0];
+        http:Client? gemini = initializeProvider("gemini", geminiConfig?.endpoint)[0];
+        http:Client? ollama = initializeProvider("ollama", ollamaConfig?.endpoint)[0];
+        http:Client? mistral = initializeProvider("mistral", mistralConfig?.endpoint)[0];
+        http:Client? cohere = initializeProvider("cohere", cohereConfig?.endpoint)[0];
+        
+        lock {
+            self.openaiClient = openai;
+            self.anthropicClient = anthropic;
+            self.geminiClient = gemini;
+            self.ollamaClient = ollama;
+            self.mistralClient = mistral;
+            self.cohereClient = cohere;
+        }
+        
         // Check if at least one provider is configured
-        if openAIConfig == () && anthropicConfig == () && geminiConfig == () && ollamaConfig == () && mistralConfig == () && cohereConfig == () {
+        boolean noProvidersConfigured;
+        lock {
+            noProvidersConfigured = self.openaiClient == () && self.anthropicClient == () && 
+                self.geminiClient == () && self.ollamaClient == () && 
+                self.mistralClient == () && self.cohereClient == ();
+        }
+        
+        if noProvidersConfigured {
             logging:logEvent(vLog, logConf, "ERROR", "HTTP:init", "No LLM providers configured");
             return error("At least one LLM provider must be configured");
         }
-
-        if openAIConfig?.endpoint != () {
-            string endpoint = openAIConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                logging:logEvent(vLog, logConf, "ERROR", "HTTP:init", "Invalid OpenAI configuration", {"error": "Empty endpoint"});
-                return error("OpenAI endpoint is required");
-            } else {
-                self.openaiClient = check new (endpoint);
-                logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "OpenAI client initialized", {"endpoint": endpoint});
-            }
-        }
-        if anthropicConfig?.endpoint != () {
-            string endpoint = anthropicConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                return error("Anthropic endpoint is required");
-            } else {
-                self.anthropicClient = check new (endpoint);
-            }
-        }
-        if geminiConfig?.endpoint != () {
-            string endpoint = geminiConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                return error("Gemini endpoint is required");
-            } else {
-                self.geminiClient = check new (endpoint);
-            }
-        }
-        if ollamaConfig?.endpoint != () {
-            string endpoint = ollamaConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                return error("Ollama endpoint is required");
-            } else {
-                self.ollamaClient = check new (endpoint, { timeout: 60 });
-            }
-        }
-        if mistralConfig?.endpoint != () {
-            string endpoint = mistralConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                return error("Mistral endpoint is required");
-            } else {
-                self.mistralClient = check new (endpoint);
-            }
-        }
-        if cohereConfig?.endpoint != () {
-            string endpoint = cohereConfig?.endpoint ?: "";
-            if (endpoint == "") {
-                return error("Cohere endpoint is required");
-            } else {
-                self.cohereClient = check new (endpoint);
-            }
-        }
+        
+        // Log successful initialization
+        string[] configuredProviders = [
+            openAIConfig != () ? "openai" : "",
+            anthropicConfig != () ? "anthropic" : "",
+            geminiConfig != () ? "gemini" : "",
+            ollamaConfig != () ? "ollama" : "",
+            mistralConfig != () ? "mistral" : "",
+            cohereConfig != () ? "cohere" : ""
+        ].filter(p => p != "");
+        
         logging:logEvent(vLog, logConf, "INFO", "HTTP:init", "AI Gateway initialization complete", {
-            "providers": [
-                openAIConfig != () ? "openai" : "",
-                anthropicConfig != () ? "anthropic" : "",
-                geminiConfig != () ? "gemini" : "",
-                ollamaConfig != () ? "ollama" : "",
-                mistralConfig != () ? "mistral" : "",
-                cohereConfig != () ? "cohere" : ""
-            ].filter(p => p != "")
+            "providers": configuredProviders
         });
     }
 
+    # Handles OpenAI-compatible chat completion API requests
+    # Processes requests from clients and routes them to the appropriate LLM provider
+    # Manages rate limiting, failover, caching, and error handling for all requests
+    # 
+    # + llmProvider - The LLM provider to use (from x-llm-provider header)
+    # + payload - The request body containing messages, parameters and completion settings
+    # + request - The original HTTP request object
+    # + ctx - The request context containing metadata and routing information
+    # + return - llms:LLMResponse - A successful completion response
+    #            http:Response - For rate limit errors or cached responses
+    #            error - If processing fails and no provider can handle the request
     isolated resource function post v1/chat/completions(
             @http:Header {name: "x-llm-provider"} string llmProvider,
             @http:Payload llms:LLMRequest payload,
@@ -1576,10 +1679,7 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
         if forwardedHeader is string {
             clientIP = forwardedHeader;
         }
-        // string clientIP = request.getHeader("X-Forwarded-For") ?: request.remoteAddress;
 
-        // Check rate limit
-        // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
         [boolean, int, int, int] rateLimitResponse = check checkRateLimit(clientIP);
         boolean allowed = rateLimitResponse[0];
         int rateLimit = rateLimitResponse[1];
@@ -1715,7 +1815,6 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
         }
 
         // Add rate limit headers to response context
-
         RateLimitPlan? rLimitP;
         lock {
             rLimitP = currentRateLimitPlan.cloneReadOnly();
@@ -1729,7 +1828,16 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
         return response;
     }
 
-        // This function handles all requests to the /services/{serviceName} path
+    # Handles egress API routes. This is the main entry point for all incoming requests to the API Gateway.
+    # Traffic is separate from LLM requests and is proxied to the appropriate backend service based on the route.
+    # Routes incoming requests to their appropriate backend services based on configuration
+    # 
+    # + serviceName - The name of the service to route to (from URL path)
+    # + path - The remaining path segments to forward to the backend service
+    # + req - The original HTTP request from the client
+    # + ctx - The request context containing metadata and routing information
+    # + return - http:Response - The response from the backend service
+    #            error - If routing fails, backend service is unavailable, or service not found
     isolated resource function 'default [string serviceName]/[string... path](
         http:Request req,
         http:RequestContext ctx) returns http:Response|error {
@@ -1808,68 +1916,11 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
             }
         }
 
-        // Check cache if enabled for this route and it's a GET request
-        string cacheKey = "";
-        if route.enableCache && req.method == "GET" {
-            // Skip cache if Cache-Control: no-cache is set
-            string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
-            if !(cacheControl is string && cacheControl == "no-cache") {
-                // Generate cache key based on service name, path and query params
-                string pathStr = "/" + string:'join("/", ...path);
-                string queryStr = req.getQueryParams().toString();
-                cacheKey = crypto:hashSha1((serviceName + pathStr + queryStr).toBytes()).toBase16();
-
-                // Check if response is in cache
-                boolean inCache = false;
-                lock {
-                    inCache = promptCache.hasKey(cacheKey);
-                }
-                if inCache {
-                    CacheEntry entry;
-                    lock {
-                        entry = promptCache.cloneReadOnly().get(cacheKey);
-                    }
-                    int currentTime = time:utcNow()[0];
-
-                    if (currentTime - entry.timestamp < cacheTTLSeconds) {
-                        logging:logEvent(vLog, logConf, "INFO", "apigateway", "Cache hit", {
-                            requestId: requestId,
-                            serviceName: serviceName,
-                            cacheKey: cacheKey
-                        });
-
-                        // Update stats
-                        lock {
-                            requestStats.totalRequests += 1;
-                            requestStats.cacheHits += 1;
-                        }
-
-                        http:Response res = new;
-                        res.setPayload(entry.response);
-                        return res;
-                    } else {
-                        // Remove expired entry
-                        lock {
-                            _ = promptCache.remove(cacheKey);
-                        }
-                        // Record a cache miss for expired entries
-                        lock {
-                            requestStats.cacheMisses += 1;
-                        }
-                    }
-                } else {
-                    // Record a cache miss when key doesn't exist
-                    lock {
-                        requestStats.cacheMisses += 1;
-                    }
-                    logging:logEvent(vLog, logConf, "DEBUG", "apigateway", "Cache miss", {
-                        requestId: requestId,
-                        serviceName: serviceName,
-                        cacheKey: cacheKey
-                    });
-                }
-            }
-        }
+        // TODO: Implement caching for backend services
+        // Check cache for response
+        // If cached response exists, return it
+        // If not, forward the request to the backend service
+        
 
         // Create client for backend service
         http:Client|error backendClient = new (route.endpoint);
@@ -1931,19 +1982,21 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
             });
             return response;
         }
-
-        // Update stats
-        // lock {
-        //     requestStats.totalRequests += 1;
-        //     requestStats.successfulRequests += 1;
-        // }
-
         return response;
     }
 
-    // isolated var llmHandelers;
-
-    // Helper function to try a specific provider
+# Attempts to route a request to the specified LLM provider
+# Handles provider selection, request processing, error handling, and metrics collection
+# Notes:
+# - Updates request and token statistics on success
+# - Records detailed error information on failure
+# - Logs all request attempts with correlation IDs for tracing
+# - Uses appropriate handler function based on provider type
+# 
+# + provider - The name of the LLM provider to use (e.g., "openai", "anthropic")
+# + payload - The LLM request payload containing messages and parameters
+# + return - llms:LLMResponse - A successful response from the LLM provider
+#            error - If the provider request fails, not configured, or encounters other issues
     private isolated function tryProvider(string provider, llms:LLMRequest & readonly payload) returns llms:LLMResponse|error {
         string requestId = uuid:createType1AsString();
         boolean vLog = false;
@@ -1969,8 +2022,6 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
                 "cohere": self.cohereClient
             };
         }
-
-
         // Map of provider to handler function
         final map<isolated function (http:Client, llms:LLMRequest) returns llms:LLMResponse|error> handlerMap = {
             "openai": handleOpenAIRequest,
@@ -2067,6 +2118,12 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
     }
 }
 
+# Extracts system and user prompts from an LLM request
+# Processes message arrays to identify and extract different prompt types
+# 
+# + llmRequest - The LLM request containing message arrays with role and content
+# + return - [string, string] - A tuple containing [systemPrompt, userPrompt]
+#            error - If the request format is invalid or required prompts are missing
 isolated function getPrompts(llms:LLMRequest llmRequest) returns [string, string]|error {
     string systemPrompt = "";
     string userPrompt = "";
@@ -2099,7 +2156,14 @@ isolated function getPrompts(llms:LLMRequest llmRequest) returns [string, string
     return [systemPrompt, userPrompt];
 }
 
-// Add new admin service
+# Admin service for the AI Gateway
+# Provides management interfaces and analytics for the gateway
+# - Exposes APIs to configure system prompts and guardrails
+# - Offers endpoints to view and manage the response cache
+# - Provides detailed analytics and statistics on usage
+# - Allows configuration of logging and rate limiting
+# - Includes service route management for the API gateway
+# - Renders a web dashboard for visual monitoring
 isolated service http:InterceptableService /admin on new http:Listener(8081) {
     // Template HTML for analytics
     private string statsTemplate = "";
@@ -2108,12 +2172,16 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
         return new ResponseInterceptor();
     }
 
+    # Initializes the Admin service for the AI Gateway
+    # Sets up HTML templates for the dashboard visualization
+    # + return - error - If initialization fails due to missing template files
+    #            () - If initialization completes successfully with all required resources
     isolated function init() returns error? {
         self.statsTemplate = check io:fileReadString("resources/stats.html");
     }
-    isolated resource function post systemprompt(@http:Payload llms:SystemPromptConfig config) returns string|error {
+    isolated resource function post systemprompt(@http:Payload llms:SystemPromptConfig config) returns json|error {
         lock { systemPrompt = config.prompt; }
-        return "System prompt updated successfully";
+        return { "status": "System prompt updated successfully" };
     }
 
     resource function get systemprompt() returns llms:SystemPromptConfig {
@@ -2125,11 +2193,11 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Add guardrails endpoints
-    resource function post guardrails(@http:Payload guardrails:GuardrailConfig config) returns string|error {
+    resource function post guardrails(@http:Payload guardrails:GuardrailConfig config) returns json|error {
         lock {
             guardrails = config.cloneReadOnly();
         }
-        return "Guardrails updated successfully";
+        return { "status": "Guardrails updated successfully" };
     }
 
     resource function get guardrails() returns guardrails:GuardrailConfig {
@@ -2139,11 +2207,11 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Add cache management endpoints
-    resource function delete cache() returns string {
+    resource function delete cache() returns json {
         lock {
             promptCache = {};
         }
-        return "Cache cleared successfully";
+        return { "status": "Cache cleared successfully" };
     }
 
     resource function get cache() returns map<CacheEntry> {
@@ -2163,11 +2231,11 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
         return response;
     }
     // Add logging configuration endpoint
-    isolated resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns string|error {
+    isolated resource function post logging(@http:Payload logging:LoggingConfig logConfig) returns json|error {
         lock {
             loggingConfig = <logging:LoggingConfig & readonly>logConfig;
         }
-        return "Logging configuration updated successfully";
+        return { "status": "Logging configuration updated successfully" };
     }
 
     isolated resource function get logging() returns logging:LoggingConfig {
@@ -2198,7 +2266,7 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Update rate limit plan
-    isolated resource function post ratelimit(@http:Payload RateLimitPlan payload) returns string|error {
+    isolated resource function post ratelimit(@http:Payload RateLimitPlan payload) returns json|error {
         lock {
             currentRateLimitPlan = payload.cloneReadOnly();
         }
@@ -2214,11 +2282,11 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
             plan: payload.toString()
         });
 
-        return "Rate limit plan updated successfully";
+        return { "status": "Rate limit plan updated successfully" };
     }
 
     // Remove rate limiting
-    isolated resource function delete ratelimit() returns string {
+    isolated resource function delete ratelimit() returns json {
         lock {
             currentRateLimitPlan = ();
         }
@@ -2231,7 +2299,7 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
         lock { logConf = loggingConfig.cloneReadOnly(); }
         logging:logEvent(vLog, logConf, "INFO", "admin", "Rate limiting disabled");
 
-        return "Rate limiting disabled";
+        return { "status": "Rate limiting disabled" };
     }
 
     // Get current rate limit states (for debugging)
@@ -2374,7 +2442,7 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
     }
 
     // Delete a route
-    isolated resource function delete routes/[string name]() returns string|error {
+    isolated resource function delete routes/[string name]() returns json|error {
         logging:LoggingConfig logConf;
         boolean vLog = false;
         lock { vLog = isVerboseLogging; }
@@ -2386,9 +2454,167 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
                 logging:logEvent(vLog, logConf.cloneReadOnly(), "INFO", "admin", "Service route deleted", {
                     name: name
                 });
-                return "Service route deleted successfully: " + name;
+                return { "status": "Service route deleted successfully: " + name };
             }
         }
         return error("Service route not found: " + name);
+    }
+}
+
+# Returns the current logging configuration settings
+# Retrieves the verbose logging flag and logging configuration in a thread-safe manner
+# 
+# + return - [boolean, logging:LoggingConfig] - A tuple containing:
+#            [0] - The current verbose logging setting (true/false)
+#            [1] - The current logging configuration with destinations and settings
+isolated function getLoggingConfig() returns [boolean, logging:LoggingConfig] {
+    boolean vLog;
+    logging:LoggingConfig logConf;
+    lock { 
+        vLog = isVerboseLogging; }
+    lock {
+        logConf = loggingConfig.cloneReadOnly();
+    }
+    return [vLog, logConf];
+}
+
+# Validates LLM provider configuration parameters
+# Checks for required configuration values and logs initialization status
+# 
+# + provider - The name of the LLM provider to validate
+# + llmClient - The HTTP client instance (if already created)
+# + endpoint - The API endpoint URL for the provider
+# + return - error? - Returns error if configuration is invalid or endpoint is empty
+isolated function validateProvider(string provider, http:Client? llmClient, string endpoint) returns error? {
+    [boolean, logging:LoggingConfig] [vLog, logConf] = getLoggingConfig();
+    
+    if endpoint == "" {
+        logging:logEvent(vLog, logConf, "ERROR", provider + ":init", "Invalid configuration", {"error": "Empty endpoint"});
+        return error(provider + " endpoint is required");
+    }
+    
+    logging:logEvent(vLog, logConf, "INFO", provider + ":init", provider + " client initialized", {"endpoint": endpoint});
+    return;
+}
+
+# Initializes an HTTP client for a specific LLM provider
+# Creates and validates the HTTP client connection to the provider's API endpoint
+# 
+# + provider - The name of the LLM provider to initialize
+# + endpoint - The API endpoint URL for the provider
+# + return - [http:Client?, error?] - A tuple containing:
+#            [0] - The initialized HTTP client (or () if initialization failed)
+#            [1] - Any error that occurred during initialization (or () if successful)
+isolated function initializeProvider(string provider, string? endpoint) returns [http:Client?, error?] {
+    if endpoint == () {
+        return [(), ()];
+    }
+    
+    string ep = endpoint;
+    error? validationResult = validateProvider(provider, (), ep);
+    if validationResult is error {
+        return [(), validationResult];
+    }
+    
+    http:Client|error llmClient;
+    if provider == "ollama" {
+        llmClient = new (ep, { timeout: 60 });
+    } else {
+        llmClient = new (ep);
+    }
+
+    if llmClient is error {
+        return [(), llmClient];
+    } else {
+        return [llmClient, ()];
+    }
+}
+
+# Add helper function for common error response handling
+# Creates standardized error responses for API failures from different providers
+# 
+# + provider - The name of the LLM provider that generated the error
+# + requestId - The unique identifier for the original request
+# + response - The error object returned from the provider API call
+# + statusCode - The HTTP status code from the provider response
+# + errorBody - The error message body from the provider response
+# + return - error - A formatted error with consistent structure and logging
+isolated function handleErrorResponse(string provider, string requestId, error response, int statusCode, string errorBody) returns error {
+    [boolean, logging:LoggingConfig] [vLog, logConf] = getLoggingConfig();
+    
+    string errorMessage = provider + " API error: HTTP " + statusCode.toString();
+    
+    logging:logEvent(vLog, logConf, "ERROR", provider, "API error response", {
+        requestId: requestId,
+        statusCode: statusCode,
+        response: errorBody
+    });
+    
+    return error(errorMessage, statusCode = statusCode, body = errorBody);
+}
+
+# Validates JSON response data from LLM provider APIs
+# Checks if response payload is valid JSON and logs detailed errors when invalid
+# 
+# + provider - The name of the LLM provider that returned the response
+# + requestId - The unique identifier for the original request
+# + responsePayload - The JSON payload or error from the provider response
+# + return - error? - Returns the original error if validation fails, or () if successful
+isolated function validateResponse(string provider, string requestId, json|error responsePayload) returns error? {
+    [boolean, logging:LoggingConfig] [vLog, logConf] = getLoggingConfig();
+    
+    if responsePayload is error {
+        logging:logEvent(vLog, logConf, "ERROR", provider, "Invalid JSON response", {
+            requestId: requestId,
+            'error: responsePayload.message() + ":" + responsePayload.detail().toString()
+        });
+        return responsePayload;
+    }
+    return;
+}
+
+# Applies guardrails to LLM response content
+# Filters and validates response text against configured safety rules
+# 
+# + provider - The name of the LLM provider that generated the response
+# + requestId - The unique identifier for the original request
+# + content - The response text content to validate
+# + return - string - The validated (and possibly modified) response text
+#            error - If content violates guardrail policies
+isolated function applyResponseGuardrails(string provider, string requestId, string content) returns string|error {
+    [boolean, logging:LoggingConfig] [vLog, logConf] = getLoggingConfig();
+    guardrails:GuardrailConfig localGuardrails;
+    lock {
+        localGuardrails = guardrails.cloneReadOnly();
+    }
+    
+    string|error guardedText = guardrails:applyGuardrails(localGuardrails, content);
+    if guardedText is error {
+        logging:logEvent(vLog, logConf, "ERROR", "guardrails", "Guardrails check failed", {
+            requestId: requestId,
+            'error: guardedText.message() + ":" + guardedText.detail().toString()
+        });
+        return guardedText;
+    }
+    return guardedText;
+}
+
+# Updates request and token statistics for successful LLM requests
+# Records request counts and token usage metrics by provider
+# Note: Updates the global requestStats and tokenStats with thread-safe locking
+# 
+# + provider - The name of the LLM provider that successfully processed the request
+# + response - The LLM response containing token usage information
+isolated function updateSuccessStats(string provider, llms:LLMResponse response) {
+    lock {
+        requestStats.totalRequests += 1;
+        requestStats.successfulRequests += 1;
+        requestStats.requestsByProvider[provider] = (requestStats.requestsByProvider[provider] ?: 0) + 1;
+    }
+    lock {   
+        tokenStats.totalInputTokens += response.usage.prompt_tokens;
+        tokenStats.totalOutputTokens += response.usage.completion_tokens;
+        tokenStats.inputTokensByProvider[provider] = (tokenStats.inputTokensByProvider[provider] ?: 0) + response.usage.prompt_tokens;
+        tokenStats.outputTokensByProvider[provider] = (tokenStats.outputTokensByProvider[provider] ?: 0) + response.usage.completion_tokens;
     }
 }
