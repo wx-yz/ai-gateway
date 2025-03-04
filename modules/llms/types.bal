@@ -96,12 +96,15 @@ public type AnthropicResponse record {
     AnthropicResponseContents contents;
     AnthropicResponseTokenUsage usage;
     string model;
+    string role;
+    string stop_reason;
 };
 
 
 // Handle OpenAI response
 public type OpenAIResponseChoiceMessage record {
     string content;
+    string role;
 };
 public type OpenAIResponseChoice record {
     int index;
@@ -122,6 +125,7 @@ public type OpenAIResponse record {
     OpenAIResponseChoice[] choices;
     OpenAIResponseUsage usage;
     string model;
+    string system_fingerprint;
 };
 
 

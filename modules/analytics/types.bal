@@ -21,3 +21,11 @@ public type ErrorStats record {
     map<int> errorsByType;
     string[] recentErrors;
 };
+
+public type ErrorEntry record {
+    int timestamp;
+    string provider;
+    string message;
+    string 'type;
+    string requestId;
+};
