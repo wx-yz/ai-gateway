@@ -1,0 +1,832 @@
+{
+	"info": {
+		"_postman_id": "13820e5f-41d4-46ae-904a-e7da49791486",
+		"name": "AI Gateway API - HTTP",
+		"description": "Test collection for the AI Gateway APIs",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "14185009"
+	},
+	"item": [
+		{
+			"name": "LLM APIs",
+			"item": [
+				{
+					"name": "Chat Completion - OpenAI",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "openai",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"system\",\n            \"content\": \"You are a helpful assistant.\"\n        },\n        {\n            \"role\": \"user\",\n            \"content\": \"Tell me a short joke about programming.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 500\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with OpenAI provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Anthropic",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "anthropic",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"system\",\n            \"content\": \"You are a helpful assistant.\"\n        },\n        {\n            \"role\": \"user\",\n            \"content\": \"Explain quantum computing in simple terms.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 500\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with Anthropic provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Gemini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "gemini",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Write a short poem about artificial intelligence.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 500\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with Gemini provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Ollama",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "ollama",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Explain how to make a simple website.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 500\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with Ollama provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Mistral",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "mistral",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"system\",\n            \"content\": \"You are a helpful assistant specialized in history.\"\n        },\n        {\n            \"role\": \"user\",\n            \"content\": \"What were the major causes of World War I?\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 1000\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with Mistral provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Cohere",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "cohere",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"system\",\n            \"content\": \"You are a helpful assistant that specializes in explaining scientific concepts.\"\n        },\n        {\n            \"role\": \"user\",\n            \"content\": \"Explain how photosynthesis works.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 800\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with Cohere provider"
+					},
+					"response": []
+				},
+				{
+					"name": "Chat Completion - Bypass Cache",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "x-llm-provider",
+								"value": "openai",
+								"type": "text"
+							},
+							{
+								"key": "Cache-Control",
+								"value": "no-cache",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Tell me a short joke about programming.\"\n        }\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 500\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "http://localhost:8080/v1/chat/completions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"v1",
+								"chat",
+								"completions"
+							]
+						},
+						"description": "Test chat completion with cache control header"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Admin APIs",
+			"item": [
+				{
+					"name": "Stats",
+					"item": [
+						{
+							"name": "Get Stats",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/stats",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"stats"
+									]
+								},
+								"description": "Get usage statistics"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "System Prompt Injection",
+					"item": [
+						{
+							"name": "Get System Prompt",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/systemprompt",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"systemprompt"
+									]
+								},
+								"description": "Get current system prompt"
+							},
+							"response": []
+						},
+						{
+							"name": "Set System Prompt",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"prompt\": \"You are an AI assistant that is helpful, harmless, and honest. Always respond in a concise and direct manner.\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/systemprompt",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"systemprompt"
+									]
+								},
+								"description": "Set system prompt"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Guardrails",
+					"item": [
+						{
+							"name": "Get Guardrails",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/guardrails",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"guardrails"
+									]
+								},
+								"description": "Get current guardrails configuration"
+							},
+							"response": []
+						},
+						{
+							"name": "Set Guardrails",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"bannedPhrases\": [\n        \"inappropriate content\",\n        \"harmful instructions\"\n    ],\n    \"minLength\": 10,\n    \"maxLength\": 8000,\n    \"requireDisclaimer\": true\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/guardrails",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"guardrails"
+									]
+								},
+								"description": "Set guardrails configuration"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Caching",
+					"item": [
+						{
+							"name": "Get Cache",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/cache",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"cache"
+									]
+								},
+								"description": "Get cache contents"
+							},
+							"response": []
+						},
+						{
+							"name": "Clear Cache",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/cache",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"cache"
+									]
+								},
+								"description": "Clear cache"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Logging",
+					"item": [
+						{
+							"name": "Get Logging Config",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/logging",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"logging"
+									]
+								},
+								"description": "Get current logging configuration"
+							},
+							"response": []
+						},
+						{
+							"name": "Set Logging Config",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"enableSplunk\": false,\n    \"enableDatadog\": true,\n    \"enableElasticSearch\": false,\n    \"openTelemetryEndpoint\": \"\",\n    \"splunkEndpoint\": \"\",\n    \"datadogEndpoint\": \"https://http-intake.logs.datadoghq.com/api/v2/logs\",\n    \"elasticSearchEndpoint\": \"\",\n    \"elasticApiKey\": \"\"\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/logging",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"logging"
+									]
+								},
+								"description": "Set logging configuration"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Rate Limiting",
+					"item": [
+						{
+							"name": "Get Rate Limit",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit"
+									]
+								},
+								"description": "Get current rate limit configuration"
+							},
+							"response": []
+						},
+						{
+							"name": "Set Rate Limit",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"default\",\n    \"requestsPerWindow\": 100,\n    \"windowSeconds\": 3600\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit"
+									]
+								},
+								"description": "Set rate limit configuration"
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Rate Limit",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit"
+									]
+								},
+								"description": "Delete rate limit configuration"
+							},
+							"response": []
+						},
+						{
+							"name": "Set Client-Specific Rate Limit",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"clientIP\": \"192.168.1.100\",\n    \"name\": \"premium-tier\",\n    \"requestsPerWindow\": 500,\n    \"windowSeconds\": 3600\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit/clients",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit",
+										"clients"
+									]
+								},
+								"description": "Set client-specific rate limit"
+							},
+							"response": []
+						},
+						{
+							"name": "Set Wildcard Rate Limit (All Clients)",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"clientIP\": \"*.*.*.*\",\n    \"name\": \"global-limit\",\n    \"requestsPerWindow\": 50,\n    \"windowSeconds\": 3600\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit/clients",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit",
+										"clients"
+									]
+								},
+								"description": "Set wildcard rate limit for all clients"
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Client-Specific Rate Limit",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit/clients/192.168.1.100",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit",
+										"clients",
+										"192.168.1.100"
+									]
+								},
+								"description": "Delete client-specific rate limit"
+							},
+							"response": []
+						},
+						{
+							"name": "Get Client-Specific Rate Limits",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit/clients",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit",
+										"clients"
+									]
+								},
+								"description": "Get all client-specific rate limits"
+							},
+							"response": []
+						},
+						{
+							"name": "Get Rate Limit States",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/ratelimit/states",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"ratelimit",
+										"states"
+									]
+								},
+								"description": "Get current rate limit states"
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Egress API Management",
+					"item": [
+						{
+							"name": "Get Service Routes",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/routes",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"routes"
+									]
+								},
+								"description": "Get all service routes"
+							},
+							"response": []
+						},
+						{
+							"name": "Get Specific Service Route",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/routes/users",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"routes",
+										"users"
+									]
+								},
+								"description": "Get specific service route"
+							},
+							"response": []
+						},
+						{
+							"name": "Create/Update Service Route",
+							"request": {
+								"method": "POST",
+								"header": [],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"users\",\n    \"endpoint\": \"http://localhost:3000\",\n    \"enableCache\": true,\n    \"enableRateLimit\": true\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "http://localhost:8081/admin/routes",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"routes"
+									]
+								},
+								"description": "Create or update service route"
+							},
+							"response": []
+						},
+						{
+							"name": "Delete Service Route",
+							"request": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "http://localhost:8081/admin/routes/users",
+									"protocol": "http",
+									"host": [
+										"localhost"
+									],
+									"port": "8081",
+									"path": [
+										"admin",
+										"routes",
+										"users"
+									]
+								},
+								"description": "Delete service route"
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		}
+	]
+}
