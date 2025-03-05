@@ -8,6 +8,8 @@ import ballerina/uuid;
 import ballerina/grpc;
 import ballerina/crypto;
 import ai_gateway.guardrails;
+import ai_gateway.ratelimit;
+// import ballerina/log;
 
 configurable llms:OpenAIConfig? & readonly openAIConfig = ();
 configurable llms:AnthropicConfig? & readonly anthropicConfig = ();
@@ -66,22 +68,6 @@ isolated logging:LoggingConfig loggingConfig = {
 // Add logging state
 isolated boolean isVerboseLogging = gateway.verboseLogging;
 
-// Add rate limiting types and storage
-type RateLimitPlan record {|
-    string name;
-    int requestsPerWindow;
-    int windowSeconds;
-|};
-
-type RateLimitState record {|
-    int requests;
-    int windowStart;
-|};
-
-// Store rate limit states by IP
-isolated map<RateLimitState> rateLimitStates = {};
-isolated RateLimitPlan? currentRateLimitPlan = ();
-
 // Add service route configuration
 type ServiceRoute record {|
     string name;
@@ -116,57 +102,6 @@ isolated analytics:ErrorStats errorStats = {
     errorsByType: {},
     recentErrors: []
 };
-
-# Checks if a client has exceeded their rate limit according to the current rate limit plan
-# Note: If no rate limit plan is configured, all requests are allowed
-# 
-# + clientIP - The IP address of the client making the request
-# + return - [boolean, int, int, int] - A tuple containing:
-#            [0] - Whether the request is allowed (true) or rejected due to rate limiting (false)
-#            [1] - The maximum number of requests allowed in the current window
-#            [2] - The number of remaining requests allowed in the current window
-#            [3] - The number of seconds until the current rate limit window resets
-#            error - If rate limit checking fails for any reason
-
-isolated function checkRateLimit(string clientIP) returns [boolean, int, int, int]|error {
-    lock {
-        if currentRateLimitPlan is () {
-            return [true, 0, 0, 0];
-        }
-    }
-    RateLimitPlan plan;
-    lock {
-        plan = <RateLimitPlan>currentRateLimitPlan.cloneReadOnly();
-    }
-    int currentTime = time:utcNow()[0];
-
-    lock {
-        RateLimitState state = rateLimitStates[clientIP] ?: {
-            requests: 0,
-            windowStart: currentTime
-        };
-        // Check if we need to reset window
-        if (currentTime - state.windowStart >= plan.windowSeconds) {
-            state = {
-                requests: 0,
-                windowStart: currentTime
-            };
-        }
-        // Calculate remaining quota and time
-        int remaining = plan.requestsPerWindow - state.requests;
-        int resetSeconds = plan.windowSeconds - (currentTime - state.windowStart);
-
-        if (state.requests >= plan.requestsPerWindow) {
-            rateLimitStates[clientIP] = state;
-            return [false, plan.requestsPerWindow, remaining, resetSeconds];
-        }
-        // Increment request count
-        state.requests += 1;
-        rateLimitStates[clientIP] = state;
-
-        return [true, plan.requestsPerWindow, remaining - 1, resetSeconds];
-    }
-}
 
 # AIGateway gRPC service
 # Provides gRPC API for interacting with the AI Gateway's LLM providers
@@ -697,9 +632,7 @@ public isolated function handleOllamaRequest(http:Client ollamaClient, llms:LLMR
                 });
 
                 return error(errorMessage, statusCode = statusCode, body = errorBody);
-        }
-
-
+            }
             return response;
         }
 
@@ -1387,7 +1320,22 @@ service class ResponseInterceptor {
     *http:ResponseInterceptor;
 
     remote function interceptResponse(http:RequestContext ctx, http:Response res) returns http:NextService|error? {
+        // Set server header identifyng AI Gateway version
         res.setHeader("Server", "ai-gateway/v1.1.0");
+
+        // Get rate limit details from request context. These are set by the RequestInterceptor
+        string|error rateLimit_Limit = ctx.getWithType("X-RateLimit-Limit");
+        string|error rateLimit_Remaining = ctx.getWithType("X-RateLimit-Remaining");
+        string|error rateLimit_Reset = ctx.getWithType("X-RateLimit-Reset");
+        if rateLimit_Limit is string && rateLimit_Limit != "0" {
+            res.setHeader("X-RateLimit-Limit", rateLimit_Limit);
+        }
+        if rateLimit_Remaining is string && rateLimit_Remaining != "0" {
+            res.setHeader("X-RateLimit-Remaining", rateLimit_Remaining);
+        }
+        if rateLimit_Reset is string  && rateLimit_Reset != "0" {
+            res.setHeader("X-RateLimit-Reset", rateLimit_Reset);
+        }
         return ctx.next();
     }
 }
@@ -1413,11 +1361,68 @@ service class RequestInterceptor {
     # + return - http:NextService - Forwards the request to the next service in the chain
     #            http:Response - Returns a cached response if available
     #            error - If any processing errors occur during interception
-    resource function 'default[string... path](http:RequestContext ctx, http:Request req) returns http:NextService|http:Response|error? {
+    resource function 'default[string... path](http:Caller caller, http:RequestContext ctx, http:Request req) returns http:NextService|http:Response|error? {
         boolean vLog = false;
         logging:LoggingConfig logConf;
         lock { vLog = isVerboseLogging; }
         lock { logConf = loggingConfig.cloneReadOnly(); }
+
+        // Enforce rate limiting
+        string clientIP = "";
+        string|http:HeaderNotFoundError forwardedHeader = req.getHeader("X-Forwarded-For");
+        if forwardedHeader is http:HeaderNotFoundError {
+            clientIP = caller.remoteAddress.ip;
+        } else {
+            clientIP = forwardedHeader;
+        }
+        
+        // Check for client-specific rate limit first, then fall back to default
+        ratelimit:ClientRateLimitPlan? clientPlan = ratelimit:getClientRateLimit(clientIP);
+        [boolean, int, int, int, string]|error rateLimitResponse = ratelimit:checkRateLimit(clientIP);
+        
+        if rateLimitResponse is error {
+            logging:logEvent(vLog, logConf, "ERROR", "ratelimit", "Rate limit check failed", {
+                clientIP: clientIP,
+                'error: rateLimitResponse.message()
+            });
+            return rateLimitResponse;
+        }
+        
+        boolean allowed = rateLimitResponse[0];
+        int rateLimit = rateLimitResponse[1];
+        int remaining = rateLimitResponse[2];
+        int reset = rateLimitResponse[3];
+        string planType = rateLimitResponse[4];
+        
+        // Log rate limit details for debugging
+        logging:logEvent(vLog, logConf, "DEBUG", "ratelimit", "Rate limit check", {
+            clientIP: clientIP,
+            planType: planType,
+            allowed: allowed,
+            'limit: rateLimit,
+            remaining: remaining,
+            reset: reset
+        });
+
+        if !allowed {
+            http:Response response = new;
+            response.statusCode = 429; // Too Many Requests
+            response.addHeader("Content-Type", "application/json");
+            response.setJsonPayload({
+                'error: "Rate limit exceeded",
+                'limit: rateLimit,
+                remaining: remaining,
+                reset: reset,
+                planType: planType  // Include plan type for debugging
+            });
+            check caller->respond(response);
+            return;
+        } else {
+            ctx.set("X-RateLimit-Limit", rateLimit.toString());
+            ctx.set("X-RateLimit-Remaining", remaining.toString());
+            ctx.set("X-RateLimit-Reset", reset.toString());
+            ctx.set("X-RateLimit-Plan", planType);
+        }
 
         // Check Cache-Control header
         string|http:HeaderNotFoundError cacheControl = req.getHeader("Cache-Control");
@@ -1438,7 +1443,6 @@ service class RequestInterceptor {
 
         // Generate cache key using SHA1
         string cacheKey = check generateCacheKey(provider, payload);
-
 
         map<CacheEntry> localPromptCache;
         lock {
@@ -1471,6 +1475,20 @@ service class RequestInterceptor {
 
                 // Set cached response
                 http:Response cachedResponse = new;
+
+                // Get rate limit details from request context. These are set by the RequestInterceptor
+                string|error rateLimit_Limit = ctx.getWithType("X-RateLimit-Limit");
+                string|error rateLimit_Remaining = ctx.getWithType("X-RateLimit-Remaining");
+                string|error rateLimit_Reset = ctx.getWithType("X-RateLimit-Reset");
+                if rateLimit_Limit is string {
+                    cachedResponse.setHeader("X-RateLimit-Limit", rateLimit_Limit);
+                }
+                if rateLimit_Remaining is string {
+                    cachedResponse.setHeader("X-RateLimit-Remaining", rateLimit_Remaining);
+                }
+                if rateLimit_Reset is string {
+                    cachedResponse.setHeader("X-RateLimit-Reset", rateLimit_Reset);
+                }
                 cachedResponse.setPayload(entry.response);
                 return  cachedResponse;
             } else {
@@ -1666,40 +1684,16 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
             @http:Header {name: "x-llm-provider"} string llmProvider,
             @http:Payload llms:LLMRequest payload,
             http:Request request,
-            http:RequestContext ctx) returns error|http:Response|llms:LLMResponse {
-        string|http:HeaderNotFoundError forwardedHeader = request.getHeader("X-Forwarded-For");
+            http:RequestContext ctx) returns http:Response|error? {
 
         boolean vLog = false;
         logging:LoggingConfig logConf;
         lock { vLog = isVerboseLogging; }
         lock { logConf = loggingConfig.cloneReadOnly(); }
 
-        // TODO: Use the client IP address from the request
-        string clientIP = "";
-        if forwardedHeader is string {
-            clientIP = forwardedHeader;
-        }
-
-        [boolean, int, int, int] rateLimitResponse = check checkRateLimit(clientIP);
-        boolean allowed = rateLimitResponse[0];
-        int rateLimit = rateLimitResponse[1];
-        int remaining = rateLimitResponse[2];
-        int reset = rateLimitResponse[3];
-
-        http:Response response = new;
-        if !allowed {
-            response.statusCode = 429; // Too Many Requests
-            response.setPayload({
-                'error: "Rate limit exceeded",
-                'limit: rateLimit,
-                remaining: remaining,
-                reset: reset
-            });
-            return response;
-        }
-
         [string, string]|error prompts = getPrompts(payload);
         if prompts is error {
+            http:Response response = new;
             response.statusCode = 400; // Bad Request
             response.setPayload({
                 'error: prompts.message()
@@ -1814,16 +1808,7 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
             });
         }
 
-        // Add rate limit headers to response context
-        RateLimitPlan? rLimitP;
-        lock {
-            rLimitP = currentRateLimitPlan.cloneReadOnly();
-        }
-        if rLimitP != () {
-            response.setHeader("RateLimit-Limit", rateLimit.toString());
-            response.setHeader("RateLimit-Remaining", remaining.toString());
-            response.setHeader("RateLimit-Reset", reset.toString());
-        }
+        http:Response response = new;
         response.setPayload(llmResponse);
         return response;
     }
@@ -1878,43 +1863,43 @@ isolated service http:InterceptableService / on new http:Listener(8080) {
             return error("Service not found");
         }
 
-        RateLimitPlan? rLimitP;
-        lock {
-            rLimitP = currentRateLimitPlan.cloneReadOnly();
-        }
-        // Check rate limits if enabled for this route
-        if route.enableRateLimit && rLimitP != () {
-            string|http:HeaderNotFoundError clientIP = req.getHeader("X-Forwarded-For");
-            if clientIP is string {
-            // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
-                [boolean, int, int, int] rateLimitRespones = check checkRateLimit(clientIP);
-                boolean allowed = rateLimitRespones[0];
-                int 'limit = rateLimitRespones[1];
-                int remaining = rateLimitRespones[2];
-                int reset = rateLimitRespones[3];
+        // ratelimit:RateLimitPlan? rLimitP;
+        // lock {
+        //     rLimitP = ratelimit:getCurrentRateLimit();
+        // }
+        // // Check rate limits if enabled for this route
+        // if route.enableRateLimit && rLimitP != () {
+        //     string|http:HeaderNotFoundError clientIP = req.getHeader("X-Forwarded-For");
+        //     if clientIP is string {
+        //     // [boolean allowed, int limit, int remaining, int reset] = check checkRateLimit(clientIP);
+        //         [boolean, int, int, int] rateLimitRespones = check ratelimit:checkRateLimit(clientIP);
+        //         boolean allowed = rateLimitRespones[0];
+        //         int 'limit = rateLimitRespones[1];
+        //         int remaining = rateLimitRespones[2];
+        //         int reset = rateLimitRespones[3];
 
-                if !allowed {
-                    logging:logEvent(vLog, logConf, "WARN", "apigateway", "Rate limit exceeded", {
-                        requestId: requestId,
-                        serviceName: routeName,
-                        clientIP: clientIP
-                    });
-                    http:Response res = new;
-                    res.statusCode = 429;
-                    res.setHeader("RateLimit-Limit", 'limit.toString());
-                    res.setHeader("RateLimit-Remaining", remaining.toString());
-                    res.setHeader("RateLimit-Reset", reset.toString());
-                    res.setPayload({ 'error: "Rate limit exceeded" });
-                    return res;
-                }
-            } else {
-                // log
-                logging:logEvent(vLog, logConf, "WARN", "apigateway", "X-Forwarded-For header not found", {
-                    requestId: requestId,
-                    serviceName: routeName
-                });
-            }
-        }
+        //         if !allowed {
+        //             logging:logEvent(vLog, logConf, "WARN", "apigateway", "Rate limit exceeded", {
+        //                 requestId: requestId,
+        //                 serviceName: routeName,
+        //                 clientIP: clientIP
+        //             });
+        //             http:Response res = new;
+        //             res.statusCode = 429;
+        //             res.setHeader("RateLimit-Limit", 'limit.toString());
+        //             res.setHeader("RateLimit-Remaining", remaining.toString());
+        //             res.setHeader("RateLimit-Reset", reset.toString());
+        //             res.setPayload({ 'error: "Rate limit exceeded" });
+        //             return res;
+        //         }
+        //     } else {
+        //         // log
+        //         logging:logEvent(vLog, logConf, "WARN", "apigateway", "X-Forwarded-For header not found", {
+        //             requestId: requestId,
+        //             serviceName: routeName
+        //         });
+        //     }
+        // }
 
         // TODO: Implement caching for backend services
         // Check cache for response
@@ -2258,22 +2243,17 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
     // Get current rate limit plan
     isolated resource function get ratelimit() returns json? {
         lock {
-            if currentRateLimitPlan == () {
-                return {};
-            }
-            return currentRateLimitPlan.cloneReadOnly();
+            // if currentRateLimitPlan == () {
+            //     return {};
+            // }
+            // return currentRateLimitPlan.cloneReadOnly();
+            return ratelimit:getCurrentRateLimit();
         }
     }
 
     // Update rate limit plan
-    isolated resource function post ratelimit(@http:Payload RateLimitPlan payload) returns json|error {
-        lock {
-            currentRateLimitPlan = payload.cloneReadOnly();
-        }
-        // Clear existing states when plan changes
-        lock {
-            rateLimitStates = {};
-        }
+    isolated resource function post ratelimit(@http:Payload ratelimit:RateLimitPlan payload) returns json|error {
+        ratelimit:setCurrentRateLimit(payload);
         logging:LoggingConfig logConf;
         boolean vLog = false;
         lock { vLog = isVerboseLogging; }
@@ -2287,12 +2267,7 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
 
     // Remove rate limiting
     isolated resource function delete ratelimit() returns json {
-        lock {
-            currentRateLimitPlan = ();
-        }
-        lock {
-            rateLimitStates = {};
-        }
+        ratelimit:setCurrentRateLimit(());
         logging:LoggingConfig logConf;
         boolean vLog = false;
         lock { vLog = isVerboseLogging; }
@@ -2302,11 +2277,57 @@ isolated service http:InterceptableService /admin on new http:Listener(8081) {
         return { "status": "Rate limiting disabled" };
     }
 
-    // Get current rate limit states (for debugging)
-    isolated resource function get ratelimit/states() returns map<RateLimitState> {
-        lock {
-            return rateLimitStates.cloneReadOnly();
+    // Get all client-specific rate limits
+    isolated resource function get ratelimit/clients() returns map<ratelimit:ClientRateLimitPlan> {
+        return ratelimit:getAllClientRateLimits();
+    }    
+
+    // Set client-specific rate limit
+    isolated resource function post ratelimit/clients(@http:Payload ratelimit:ClientRateLimitPlan payload) returns json|error {
+        if payload.clientIP == "" {
+            return error("Client IP is required");
         }
+        
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+        
+        ratelimit:setClientRateLimit(payload);
+        
+        logging:logEvent(vLog, logConf, "INFO", "admin", "Client-specific rate limit updated", {
+            clientIP: payload.clientIP,
+            plan: payload.toString()
+        });
+        
+        return {
+            "status": "Client-specific rate limit updated successfully",
+            "clientIP": payload.clientIP
+        };
+    }
+
+    // Remove client-specific rate limit
+    isolated resource function delete ratelimit/clients/[string clientIP]() returns json {
+        logging:LoggingConfig logConf;
+        boolean vLog = false;
+        lock { vLog = isVerboseLogging; }
+        lock { logConf = loggingConfig.cloneReadOnly(); }
+        
+        ratelimit:removeClientRateLimit(clientIP);
+        
+        logging:logEvent(vLog, logConf, "INFO", "admin", "Client-specific rate limit removed", {
+            clientIP: clientIP
+        });
+        
+        return {
+            "status": "Client-specific rate limit removed successfully",
+            "clientIP": clientIP
+        };
+    }    
+
+    // Get current rate limit states (for debugging)
+    isolated resource function get ratelimit/states() returns map<ratelimit:RateLimitState> {
+        return ratelimit:getRateLimitStates();
     }
 
     // Add new JSON stats endpoint
