@@ -16,7 +16,7 @@ endpoint = "https://api.openai.com"
 docker run -p \
     8080:8080 -p 8081:8081 -p 8082:8082 \
     -v $(pwd)/Config.toml:/home/ballerina/Config.toml \
-    chintana/ai-gateway:v1.1.0
+    chintana/ai-gateway:v1.2.0
 ```
 3. Start sending requests
 ```
