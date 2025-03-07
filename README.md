@@ -16,7 +16,7 @@ endpoint = "https://api.openai.com"
 docker run -p \
     8080:8080 -p 8081:8081 -p 8082:8082 \
     -v $(pwd)/Config.toml:/home/ballerina/Config.toml \
-    chintana/ai-gateway:v1.1.0
+    chintana/ai-gateway:v1.2.0
 ```
 3. Start sending requests
 ```
@@ -175,11 +175,13 @@ Gateway automatiacally enable response caching to improve performance and save c
 
 Gateway configuration can be done using either the built-in admin UI or using the REST API
 
-### Admin UI
+### Using AI Gateway API
 
-Use the following Postman collection test the AI Gateway
+Use the following Postman collection to test the AI Gateway admin API. Configure rate limiting, add guardralis, manage caching etc... with the admin API. Also the collection supports calling chat completion APIs for different LLMs.
 
 [<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://god.gw.postman.com/run-collection/14185009-b582afdc-3194-4d82-ae06-416946f78eac?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D14185009-b582afdc-3194-4d82-ae06-416946f78eac%26entityType%3Dcollection%26workspaceId%3D64e3340f-fb8a-4791-9887-e559c4fdb5b3)
+
+### Admin UI
 
 Main Admin UI display current stats on the server
 
