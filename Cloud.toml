@@ -1,7 +1,7 @@
 [container.image]
 repository="chintana"
 name="ai-gateway"
-tag="v1.1.0"
+tag="v1.2.0"
 
 [[container.copy.files]]
 sourceFile="resources"
