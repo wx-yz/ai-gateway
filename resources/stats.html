@@ -270,8 +270,31 @@
                             <div class="col-md-6">
                                 <div class="card">
                                     <div class="card-body">
+                                        <h5 class="card-title chart-title">Errors by Type</h5>
+                                        <div class="chart-container">
+                                            <canvas id="errorsChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row mt-4">
+                            <div class="col-md-12">
+                                <div class="card">
+                                    <div class="card-body">
                                         <h5 class="card-title">Recent Errors</h5>
-                                        <ul class="list-group" id="recentErrors"></ul>
+                                        <table class="table table-dark table-striped" id="recentErrorsTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>Date</th>
+                                                    <th>Provider</th>
+                                                    <th>Type</th>
+                                                    <th>Message</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="recentErrors"></tbody>
+                                        </table>
                                     </div>
                                 </div>
                             </div>
@@ -573,9 +596,11 @@
             requestsChart.options = { ...requestsChart.options, ...updateOptions };
             tokensChart.options = { ...tokensChart.options, ...updateOptions };
             cacheChart.options = { ...cacheChart.options, ...updateOptions };
+            errorsChart.options = { ...errorsChart.options, ...updateOptions };
             requestsChart.update();
             tokensChart.update();
             cacheChart.update();
+            errorsChart.update();
         }
 
         async function loadStats() {
@@ -593,6 +618,7 @@
             const requestsCtx = requestsChart.ctx;
             const tokensCtx = tokensChart.ctx;
             const cacheCtx = cacheChart.ctx;
+            const errorsCtx = errorsChart.ctx;
 
             // Update requests chart
             requestsChart.data.labels = stats.requests.labels;
@@ -633,29 +659,41 @@
             cacheChart.options.plugins.annotation.annotations.averageLine.yMax = cacheAvg;
             cacheChart.update();
 
+            // Update errors chart
+            errorsChart.data.labels = stats.errors.labels;
+            errorsChart.data.datasets[0].data = stats.errors.data;
+            errorsChart.data.datasets[0].backgroundColor = stats.errors.labels.map(label => 
+                createGradient(errorsCtx, errorsChart.chartArea, '#ff4444'));
+            errorsChart.data.datasets[0].borderColor = '#ff4444';
+            const errorsAvg = stats.errors.data.reduce((a, b) => a + b, 0) / stats.errors.data.length;
+            errorsChart.options.plugins.annotation.annotations.averageLine.yMin = errorsAvg;
+            errorsChart.options.plugins.annotation.annotations.averageLine.yMax = errorsAvg;
+            errorsChart.update();
+
             const errorsList = document.getElementById('recentErrors');
             errorsList.innerHTML = stats.errors.recent.map(error => {
-                let errorText = error.toString();
-                Object.keys(getProviderColors()).forEach(provider => {
-                    if (errorText.toLowerCase().includes(provider)) {
-                        errorText = errorText.replace(
-                            new RegExp(provider, 'i'),
-                            `<span class="provider-${provider.toLowerCase()}">${provider}</span>`
-                        );
-                    }
-                });
-                return `<li class="list-group-item">${errorText}</li>`;
+                let errorObj = JSON.parse(error);
+                let errorText = `
+                    <tr>
+                        <td>${new Date(errorObj.timestamp * 1000).toLocaleString()}</td>
+                        <td>${errorObj.provider}</td>
+                        <td>${errorObj.type}</td>
+                        <td>${errorObj.message}</td>
+                    </tr>
+                `;
+                return errorText;
             }).join('');
 
             document.getElementById('cacheSize').textContent = stats.cache.size.toLocaleString();
         }
 
-        let requestsChart, tokensChart, cacheChart;
+        let requestsChart, tokensChart, cacheChart, errorsChart;
 
         async function initializeCharts() {
             const requestsCtx = document.getElementById('requestsChart').getContext('2d');
             const tokensCtx = document.getElementById('tokensChart').getContext('2d');
             const cacheCtx = document.getElementById('cacheChart').getContext('2d');
+            const errorsCtx = document.getElementById('errorsChart').getContext('2d');
 
             requestsChart = new Chart(requestsCtx, {
                 type: 'bar',
@@ -703,6 +741,21 @@
                     datasets: [{
                         label: 'Requests',
                         data: [0, 0],
+                        backgroundColor: [],
+                        borderColor: [],
+                        borderWidth: 2
+                    }]
+                },
+                options: getAdvancedChartOptions()
+            });
+
+            errorsChart = new Chart(errorsCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Errors',
+                        data: [],
                         backgroundColor: [],
                         borderColor: [],
                         borderWidth: 2

@@ -125,7 +125,7 @@ public type OpenAIResponse record {
     OpenAIResponseChoice[] choices;
     OpenAIResponseUsage usage;
     string model;
-    string system_fingerprint;
+    string system_fingerprint?;
 };
 
 

@@ -19,9 +19,24 @@ type LogEntry record {
     time:Utc timestamp;
 };
 
-public isolated function logEvent(boolean isVerboseLogging, LoggingConfig loggingConfig, string level, string component, string message, map<json> metadata = {}) {
-    if (!isVerboseLogging && level == "DEBUG") {
-        return;
+isolated boolean isVerboseLogging = false;
+
+isolated LoggingConfig loggingConfig = {
+    enableSplunk: false,
+    enableDatadog: false,
+    enableElasticSearch: false,
+    openTelemetryEndpoint: "",
+    splunkEndpoint: "",
+    datadogEndpoint: "",
+    elasticSearchEndpoint: "",
+    elasticApiKey: ""
+};
+
+public isolated function logEvent(string level, string component, string message, map<json> metadata = {}) {
+    lock {
+        if (!isVerboseLogging && level == "DEBUG") {
+            return;
+        }
     }
 
     // Create a copy of metadata to avoid modifying the original
@@ -46,14 +61,16 @@ public isolated function logEvent(boolean isVerboseLogging, LoggingConfig loggin
     log:printInfo(logEntry.toString());
 
     // Publish to configured services
-    if (loggingConfig.enableSplunk) {
-        _ = start publishToSplunk(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
+    LoggingConfig lconf;
+    lock { lconf = loggingConfig.cloneReadOnly(); }
+    if (lconf.enableSplunk) {
+        _ = start publishToSplunk(lconf.cloneReadOnly(), logEntry.cloneReadOnly());
     }
-    if (loggingConfig.enableDatadog) {
-        _ = start publishToDatadog(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
+    if (lconf.enableDatadog) {
+        _ = start publishToDatadog(lconf.cloneReadOnly(), logEntry.cloneReadOnly());
     }
-    if (loggingConfig.enableElasticSearch) {
-        _ = start publishToElasticSearch(loggingConfig.cloneReadOnly(), logEntry.cloneReadOnly());
+    if (lconf.enableElasticSearch) {
+        _ = start publishToElasticSearch(lconf.cloneReadOnly(), logEntry.cloneReadOnly());
     }
 }
 
@@ -143,4 +160,32 @@ isolated function formatPayload(json logEntry) returns json|error {
 // Helper function to parse JSON string
 isolated function parseStringAsJson(string jsonStr) returns json|error {
     return jsonStr.fromJsonString();
+}
+
+
+public isolated function setVerboseLogging(boolean enableVerboseLogging) {
+    lock {
+        isVerboseLogging = enableVerboseLogging;
+    }
+}
+
+public isolated function getVerboseLogging() returns boolean {
+    boolean verboseLogging;
+    lock {
+        verboseLogging = isVerboseLogging;
+    }
+    return verboseLogging;
+}
+
+public isolated function setLoggingConf(LoggingConfig logConfig) {
+    lock {
+        loggingConfig = logConfig.cloneReadOnly();
+    }
+}
+
+public isolated function getLoggingConf() returns LoggingConfig {
+    lock {
+        return loggingConfig.cloneReadOnly();
+    }
+    
 }

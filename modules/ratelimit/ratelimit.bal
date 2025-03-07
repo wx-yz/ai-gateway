@@ -121,6 +121,7 @@ public isolated function getRateLimitStates() returns map<RateLimitState> {
 # Uses client-specific plan if available, otherwise falls back to the default plan
 # 
 # + clientIP - The IP address of the client making the request
+# + clientPlan - The client-specific rate limit plan (optional)
 # + return - [boolean, int, int, int, string] - A tuple containing:
 #            [0] - Whether the request is allowed (true) or rejected due to rate limiting (false)
 #            [1] - The maximum number of requests allowed in the current window
@@ -128,19 +129,22 @@ public isolated function getRateLimitStates() returns map<RateLimitState> {
 #            [3] - The number of seconds until the current rate limit window resets
 #            [4] - The type of plan applied ("client-specific", "wildcard", or "default")
 #            error - If rate limit checking fails for any reason
-public isolated function checkRateLimit(string clientIP) returns [boolean, int, int, int, string]|error {
+public isolated function checkRateLimit(string clientIP, ClientRateLimitPlan? clientPlan = ()) returns 
+        [boolean, int, int, int, string]|error {
+
     // Skip rate limiting for empty IP addresses
     if clientIP == "" {
         return [true, 0, 0, 0, ""];
     }
-    
     // Check if client has a specific rate limit plan
-    ClientRateLimitPlan? clientPlan;
+    ClientRateLimitPlan? effectiveClientPlan = clientPlan;
     ClientRateLimitPlan? wildcardPlan;  // For "*.*.*.*" wildcard rate limit
     RateLimitPlan? defaultPlan;
-    
-    lock {
-        clientPlan = clientRateLimitPlans.cloneReadOnly()[clientIP];
+
+    if effectiveClientPlan == () {
+        lock {
+            effectiveClientPlan = clientRateLimitPlans.cloneReadOnly()[clientIP];
+        }
     }
     lock {
         wildcardPlan = clientRateLimitPlans.cloneReadOnly()[WILDCARD_IP];
@@ -148,73 +152,66 @@ public isolated function checkRateLimit(string clientIP) returns [boolean, int, 
     lock {
         defaultPlan = currentRateLimitPlan.cloneReadOnly();
     }
-    
+
     // Precedence: specific client plan > wildcard plan > default plan
     // If no plan is available (at any level), allow the request
-    if clientPlan == () && wildcardPlan == () && defaultPlan == () {
+    if effectiveClientPlan == () && wildcardPlan == () && defaultPlan == () {
         return [true, 0, 0, 0, ""];
     }
-    
-    int requestsPerWindow;
-    int windowSeconds;
-    string planType; // For logging/debugging
-    
-    // Use client-specific plan if available
-    if clientPlan != () {
-        requestsPerWindow = clientPlan.requestsPerWindow;
-        windowSeconds = clientPlan.windowSeconds;
+
+    // Determine the applicable rate limit plan
+    ClientRateLimitPlan? applicablePlan;
+    string planType;
+    if effectiveClientPlan != () {
+        applicablePlan = effectiveClientPlan;
         planType = "client-specific";
-    } 
-    // Otherwise use wildcard plan if available
-    else if wildcardPlan != () {
-        requestsPerWindow = wildcardPlan.requestsPerWindow;
-        windowSeconds = wildcardPlan.windowSeconds;
+    } else if wildcardPlan != () {
+        applicablePlan = wildcardPlan;
         planType = "wildcard";
-    } 
-    // Finally fall back to default plan
-    else {
-        RateLimitPlan plan = <RateLimitPlan>defaultPlan;
-        requestsPerWindow = plan.requestsPerWindow;
-        windowSeconds = plan.windowSeconds;
+    } else {
+        applicablePlan = ();
         planType = "default";
     }
-    
+
+    // Get the rate limit state for the client
+    RateLimitState state;
+
+    map<RateLimitState> rlStatesLocal;
+    lock {
+        rlStatesLocal = rateLimitStates.cloneReadOnly();
+    }
+    state = rlStatesLocal[clientIP] ?: {requests: 0, windowStart: 0};
+
+    // Get the current time
     int currentTime = time:utcNow()[0];
 
-    lock {
-        RateLimitState|error curStates = rateLimitStates[clientIP].cloneWithType(RateLimitState);
-        RateLimitState state;
-        if curStates is error {
-            state = {
-                requests: 0,
-                windowStart: currentTime
-            };
-        } else {
-            state = curStates;
-        }
-        
-        // Check if we need to reset window
-        if (currentTime - state.windowStart >= windowSeconds) {
-            state = {
-                requests: 0,
-                windowStart: currentTime
-            };
-        }
-        
-        // Calculate remaining quota and time
-        int remaining = requestsPerWindow - state.requests;
-        int resetSeconds = windowSeconds - (currentTime - state.windowStart);
+    // Calculate the remaining time in the current window
+    int windowSeconds = applicablePlan != () ? applicablePlan.windowSeconds : defaultPlan?.windowSeconds ?: 0;
+    int windowStart = state.windowStart;
+    int windowEnd = windowStart + windowSeconds;
+    int remainingTime = windowEnd - currentTime;
 
-        // Check if rate limit is exceeded
-        if (state.requests >= requestsPerWindow) {
-            rateLimitStates[clientIP] = state;
-            return [false, requestsPerWindow, remaining, resetSeconds, planType];
+    // Check if the current window has expired
+    if remainingTime <= 0 {
+        // Reset the rate limit state for the new window
+        lock {
+            rateLimitStates[clientIP] = {requests: 1, windowStart: currentTime};
         }
-        
-        // Increment request count
-        state.requests += 1;
-        rateLimitStates[clientIP] = state;
-
-        return [true, requestsPerWindow, remaining - 1, resetSeconds, planType];
+        return [true, 
+                applicablePlan?.requestsPerWindow ?: defaultPlan?.requestsPerWindow ?: 
+                    0, (applicablePlan?.requestsPerWindow ?: defaultPlan?.requestsPerWindow ?: 0) - 1, windowSeconds, planType];
     }
+
+    // Check if the client has exceeded their rate limit
+    int requestsPerWindow = applicablePlan?.requestsPerWindow ?: defaultPlan?.requestsPerWindow ?: 0;
+    if state.requests >= requestsPerWindow {
+        return [false, requestsPerWindow, 0, remainingTime, planType];
+    }
+
+    // Increment the request count for the current window
+    lock {
+        rateLimitStates[clientIP] = {requests: state.requests + 1, windowStart: windowStart};
+    }
+
+    return [true, requestsPerWindow, requestsPerWindow - state.requests - 1, remainingTime, planType];
 }
