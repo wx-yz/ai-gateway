@@ -1,10 +1,11 @@
 {
 	"info": {
-		"_postman_id": "13820e5f-41d4-46ae-904a-e7da49791486",
+		"_postman_id": "b582afdc-3194-4d82-ae06-416946f78eac",
 		"name": "AI Gateway API - HTTP",
 		"description": "Test collection for the AI Gateway APIs",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "14185009"
+		"_exporter_id": "14185009",
+		"_collection_link": "https://www.postman.com/wx-yz/ai-gateway/collection/z6aoaco/ai-gateway-api-http?action=share&source=collection_link&creator=14185009"
 	},
 	"item": [
 		{
@@ -523,78 +524,6 @@
 				{
 					"name": "Rate Limiting",
 					"item": [
-						{
-							"name": "Get Rate Limit",
-							"request": {
-								"method": "GET",
-								"header": [],
-								"url": {
-									"raw": "http://localhost:8081/admin/ratelimit",
-									"protocol": "http",
-									"host": [
-										"localhost"
-									],
-									"port": "8081",
-									"path": [
-										"admin",
-										"ratelimit"
-									]
-								},
-								"description": "Get current rate limit configuration"
-							},
-							"response": []
-						},
-						{
-							"name": "Set Rate Limit",
-							"request": {
-								"method": "POST",
-								"header": [],
-								"body": {
-									"mode": "raw",
-									"raw": "{\n    \"name\": \"default\",\n    \"requestsPerWindow\": 100,\n    \"windowSeconds\": 3600\n}",
-									"options": {
-										"raw": {
-											"language": "json"
-										}
-									}
-								},
-								"url": {
-									"raw": "http://localhost:8081/admin/ratelimit",
-									"protocol": "http",
-									"host": [
-										"localhost"
-									],
-									"port": "8081",
-									"path": [
-										"admin",
-										"ratelimit"
-									]
-								},
-								"description": "Set rate limit configuration"
-							},
-							"response": []
-						},
-						{
-							"name": "Delete Rate Limit",
-							"request": {
-								"method": "DELETE",
-								"header": [],
-								"url": {
-									"raw": "http://localhost:8081/admin/ratelimit",
-									"protocol": "http",
-									"host": [
-										"localhost"
-									],
-									"port": "8081",
-									"path": [
-										"admin",
-										"ratelimit"
-									]
-								},
-								"description": "Delete rate limit configuration"
-							},
-							"response": []
-						},
 						{
 							"name": "Set Client-Specific Rate Limit",
 							"request": {
