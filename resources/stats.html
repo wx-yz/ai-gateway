@@ -347,6 +347,25 @@
                                 <button class="btn btn-danger" onclick="clearCache()">Clear Cache</button>
                             </div>
                         </div>
+
+                        <div class="card settings-card">
+                            <div class="card-body">
+                                <h5 class="card-title">Service Routes</h5>
+                                <table class="table table-dark table-striped" id="routesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Endpoint</th>
+                                            <th>Enable Cache</th>
+                                            <th>Enable Rate Limit</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="routes"></tbody>
+                                </table>
+                                <button class="btn btn-primary" onclick="showAddRouteModal()">Add Route</button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Logging Tab -->
@@ -400,23 +419,90 @@
                         <div class="card settings-card">
                             <div class="card-body">
                                 <h5 class="card-title">Rate Limiting Configuration</h5>
-                                <div class="mb-3">
-                                    <label class="form-label">Plan Name</label>
-                                    <input type="text" class="form-control" id="planName">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Requests Per Window</label>
-                                    <input type="number" class="form-control" id="requestsPerWindow">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Window Seconds</label>
-                                    <input type="number" class="form-control" id="windowSeconds">
-                                </div>
-                                <button class="btn btn-primary" onclick="updateRateLimit()">Update</button>
-                                <button class="btn btn-danger" onclick="disableRateLimit()">Disable Rate Limiting</button>
+                                <button class="btn btn-primary mb-3" onclick="showAddRateLimitModal()">Add Rate Limit Policy</button>
+                                <table class="table table-dark table-striped" id="rateLimitTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Client IP</th>
+                                            <th>Plan Name</th>
+                                            <th>Requests Per Window</th>
+                                            <th>Window Seconds</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rateLimits"></tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Add/Edit Rate Limit Modal -->
+                    <div class="modal fade" id="rateLimitModal" tabindex="-1" aria-labelledby="rateLimitModalLabel" aria-hidden="true">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title" id="rateLimitModalLabel">Add/Edit Rate Limit Policy</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label class="form-label">Client IP</label>
+                                        <input type="text" class="form-control" id="clientIP">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Plan Name</label>
+                                        <input type="text" class="form-control" id="planName">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Requests Per Window</label>
+                                        <input type="number" class="form-control" id="requestsPerWindow">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Window Seconds</label>
+                                        <input type="number" class="form-control" id="windowSeconds">
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                    <button type="button" class="btn btn-primary" onclick="saveRateLimit()">Save</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Route Modal -->
+    <div class="modal fade" id="routeModal" tabindex="-1" aria-labelledby="routeModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="routeModalLabel">Add/Edit Route</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name</label>
+                        <input type="text" class="form-control" id="routeName">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Endpoint</label>
+                        <input type="text" class="form-control" id="routeEndpoint">
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="routeEnableCache">
+                        <label class="form-check-label">Enable Cache</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="routeEnableRateLimit">
+                        <label class="form-check-label">Enable Rate Limit</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="saveRoute()">Save</button>
                 </div>
             </div>
         </div>
@@ -799,7 +885,7 @@
             document.getElementById('enableDatadog').checked = loggingData.enableDatadog;
             document.getElementById('datadogEndpoint').value = loggingData.datadogEndpoint;
 
-            const rateLimitResponse = await fetch('/admin/ratelimit');
+            const rateLimitResponse = await fetch('/admin/ratelimit/clients');
             const rateLimitData = await rateLimitResponse.json();
             if (rateLimitData) {
                 document.getElementById('planName').value = rateLimitData.name;
@@ -863,7 +949,7 @@
                 requestsPerWindow: parseInt(document.getElementById('requestsPerWindow').value),
                 windowSeconds: parseInt(document.getElementById('windowSeconds').value)
             };
-            await fetch('/admin/ratelimit', {
+            await fetch('/admin/ratelimit/clients', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(config)
@@ -872,13 +958,180 @@
         }
 
         async function disableRateLimit() {
-            await fetch('/admin/ratelimit', {method: 'DELETE'});
+            await fetch('/admin/ratelimit/clients', {method: 'DELETE'});
             showToast('Rate limiting disabled');
         }
 
         function showToast(message) {
             alert(message);
         }
+
+        async function loadRoutes() {
+            const response = await fetch('/admin/routes');
+            const routes = await response.json();
+
+            const routesList = document.getElementById('routes');
+            routesList.innerHTML = Object.keys(routes).map(name => {
+                const route = routes[name];
+                return `
+                    <tr>
+                        <td>${route.name}</td>
+                        <td>${route.endpoint}</td>
+                        <td>${route.enableCache ? 'Yes' : 'No'}</td>
+                        <td>${route.enableRateLimit ? 'Yes' : 'No'}</td>
+                        <td>
+                            <button class="btn btn-sm btn-warning" onclick="editRoute('${name}')">Edit</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteRoute('${name}')">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function showAddRouteModal() {
+            document.getElementById('routeName').value = '';
+            document.getElementById('routeEndpoint').value = '';
+            document.getElementById('routeEnableCache').checked = true;
+            document.getElementById('routeEnableRateLimit').checked = true;
+            document.getElementById('routeModalLabel').textContent = 'Add Route';
+            const routeModal = new bootstrap.Modal(document.getElementById('routeModal'));
+            routeModal.show();
+        }
+
+        async function saveRoute() {
+            const name = document.getElementById('routeName').value;
+            const endpoint = document.getElementById('routeEndpoint').value;
+            const enableCache = document.getElementById('routeEnableCache').checked;
+            const enableRateLimit = document.getElementById('routeEnableRateLimit').checked;
+
+            const route = {
+                name: name,
+                endpoint: endpoint,
+                enableCache: enableCache,
+                enableRateLimit: enableRateLimit
+            };
+
+            await fetch('/admin/routes', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(route)
+            });
+
+            const routeModal = bootstrap.Modal.getInstance(document.getElementById('routeModal'));
+            routeModal.hide();
+            loadRoutes();
+            showToast('Route saved successfully');
+        }
+
+        async function editRoute(name) {
+            fetch(`/admin/routes/${name}`)
+                .then(response => response.json())
+                .then(route => {
+                    document.getElementById('routeName').value = route.name;
+                    document.getElementById('routeEndpoint').value = route.endpoint;
+                    document.getElementById('routeEnableCache').checked = route.enableCache;
+                    document.getElementById('routeEnableRateLimit').checked = route.enableRateLimit;
+                    document.getElementById('routeModalLabel').textContent = 'Edit Route';
+                    const routeModal = new bootstrap.Modal(document.getElementById('routeModal'));
+                    routeModal.show();
+                });
+        }
+
+        async function deleteRoute(name) {
+            if (confirm(`Are you sure you want to delete the route "${name}"?`)) {
+                await fetch(`/admin/routes/${name}`, {method: 'DELETE'});
+                loadRoutes();
+                showToast('Route deleted successfully');
+            }
+        }
+
+        async function loadRateLimits() {
+            const response = await fetch('/admin/ratelimit/clients');
+            const rateLimits = await response.json();
+
+            const rateLimitsList = document.getElementById('rateLimits');
+            rateLimitsList.innerHTML = Object.keys(rateLimits).map(clientIP => {
+                const policy = rateLimits[clientIP];
+                return `
+                    <tr>
+                        <td>${policy.clientIP}</td>
+                        <td>${policy.name}</td>
+                        <td>${policy.requestsPerWindow}</td>
+                        <td>${policy.windowSeconds}</td>
+                        <td>
+                            <button class="btn btn-sm btn-warning" onclick="editRateLimit('${clientIP}')">Edit</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteRateLimit('${clientIP}')">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function showAddRateLimitModal() {
+            document.getElementById('clientIP').value = '*.*.*.*';
+            document.getElementById('planName').value = '';
+            document.getElementById('requestsPerWindow').value = '';
+            document.getElementById('windowSeconds').value = '';
+            document.getElementById('rateLimitModalLabel').textContent = 'Add Rate Limit Policy';
+            const rateLimitModal = new bootstrap.Modal(document.getElementById('rateLimitModal'));
+            rateLimitModal.show();
+        }
+
+        async function saveRateLimit() {
+            const clientIP = document.getElementById('clientIP').value;
+            const name = document.getElementById('planName').value;
+            const requestsPerWindow = parseInt(document.getElementById('requestsPerWindow').value);
+            const windowSeconds = parseInt(document.getElementById('windowSeconds').value);
+
+            const policy = {
+                clientIP: clientIP,
+                name: name,
+                requestsPerWindow: requestsPerWindow,
+                windowSeconds: windowSeconds
+            };
+
+            await fetch('/admin/ratelimit/clients', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(policy)
+            });
+
+            const rateLimitModal = bootstrap.Modal.getInstance(document.getElementById('rateLimitModal'));
+            rateLimitModal.hide();
+            loadRateLimits();
+            showToast('Rate limit policy saved successfully');
+        }
+
+        async function editRateLimit(clientIP) {
+            fetch(`/admin/ratelimit/clients`)
+                .then(response => response.json())
+                .then(rateLimits => {
+                    const policy = rateLimits[clientIP];
+                    document.getElementById('clientIP').value = policy.clientIP;
+                    document.getElementById('planName').value = policy.name;
+                    document.getElementById('requestsPerWindow').value = policy.requestsPerWindow;
+                    document.getElementById('windowSeconds').value = policy.windowSeconds;
+                    document.getElementById('rateLimitModalLabel').textContent = 'Edit Rate Limit Policy';
+                    const rateLimitModal = new bootstrap.Modal(document.getElementById('rateLimitModal'));
+                    rateLimitModal.show();
+                });
+        }
+
+        async function deleteRateLimit(clientIP) {
+            if (confirm(`Are you sure you want to delete the rate limit policy for "${clientIP}"?`)) {
+                await fetch(`/admin/ratelimit/clients/${clientIP}`, {method: 'DELETE'});
+                loadRateLimits();
+                showToast('Rate limit policy deleted successfully');
+            }
+        }
+
+        window.addEventListener('load', async () => {
+            await initializeCharts();
+            await loadInitialValues();
+            await loadRoutes();
+            await loadRateLimits();
+            startStatsRefresh();
+        });
     </script>
 </body>
 </html>
