@@ -344,7 +344,7 @@ service class ResponseInterceptor {
 
     remote function interceptResponse(http:RequestContext ctx, http:Response res) returns http:NextService|error? {
         // Set server header identifyng AI Gateway version
-        res.setHeader("Server", "ai-gateway/v1.1.0");
+        res.setHeader("Server", "ai-gateway/v1.2.0");
 
         // Get rate limit details from request context. These are set by the RequestInterceptor
         string|error rateLimit_Limit = ctx.getWithType("X-RateLimit-Limit");
